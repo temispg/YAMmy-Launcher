@@ -51,6 +51,22 @@
     <string name="accessibility_hide">Hide app</string>
     <string name="rename_error">Unable to start rename mode</string>
 
+    <!--Folders-->
+    <string name="pinned_section">Pinned</string>
+    <string name="folders">Folders</string>
+    <string name="all_apps">All apps</string>
+    <string name="add_to_folder">Add to folder</string>
+    <string name="new_folder">New folder</string>
+    <string name="folder_name">Folder name</string>
+    <string name="rename_folder">Rename folder</string>
+    <string name="delete_folder">Delete folder</string>
+    <string name="delete">Delete</string>
+    <string name="delete_folder_confirm">Delete \"%1$s\"? The apps inside are not affected.</string>
+    <string name="folder_empty">This folder is empty. Long press an app and choose \"Add to folder\".</string>
+    <string name="folder_missing">This folder no longer exists</string>
+    <string name="save">Save</string>
+    <string name="done">Done</string>
+
     <!--Settings Page-->
     <string name="settings_title">Launcher Settings</string>
 
@@ -152,6 +168,37 @@
     <string
         name="notification_permission_text"
     >Enable notification access to show notification dots</string>
+
+    <string name="now_playing">Now Playing</string>
+    <string name="show_now_playing">Show Now Playing</string>
+    <string
+        name="now_playing_summary"
+    >Show media controls on the home screen while music is playing. Swipe the widget away to stop playback.</string>
+    <string name="now_playing_album_art">Album art</string>
+    <string name="now_playing_play">Play</string>
+    <string name="now_playing_pause">Pause</string>
+    <string name="now_playing_next">Next track</string>
+    <string name="now_playing_previous">Previous track</string>
+
+    <string name="widget_stack">Widget Stack</string>
+    <string name="show_widget_stack">Show Widget Stack</string>
+    <string
+        name="widget_stack_summary"
+    >Show a swipeable stack of app widgets at the bottom of the home screen</string>
+    <string name="widget_stack_widgets">Widgets</string>
+    <string name="widget_stack_height">Stack Height (dp)</string>
+    <string name="widget_stack_added">Added Widgets</string>
+    <string name="widget_stack_available">Available Widgets</string>
+    <string name="widget_remove_summary">Tap to remove</string>
+    <string name="widget_unavailable">Unavailable widget</string>
+    <string name="widget_add_failed">Could not add widget</string>
+    <string name="widget_size_summary">%1$d × %2$d cells · %3$d × %4$d dp</string>
+    <string name="widget_group_expanded">Expanded</string>
+    <string name="widget_group_collapsed">Collapsed</string>
+    <plurals name="widget_stack_count">
+        <item quantity="one">%d widget</item>
+        <item quantity="other">%d widgets</item>
+    </plurals>
 
     <string name="gestures">Gestures</string>
     <string name="swipe_left">Swipe Left</string>

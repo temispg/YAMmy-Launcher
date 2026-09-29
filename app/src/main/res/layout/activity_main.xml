@@ -248,6 +248,15 @@
 
         </androidx.constraintlayout.widget.ConstraintLayout>
 
+        <!-- Inflated lazily the first time media plays; costs nothing until then. -->
+        <ViewStub
+            android:id="@+id/nowPlayingStub"
+            android:layout="@layout/now_playing_widget"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginHorizontal="32dp"
+            android:inflatedId="@+id/nowPlayingWidget" />
+
         <Space
             android:id="@+id/topSpace"
             android:layout_width="match_parent"
@@ -514,6 +523,15 @@
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="0.3" />
+
+        <!-- Inflated only when the widget stack is enabled; height comes from preferences. -->
+        <ViewStub
+            android:id="@+id/widgetStackStub"
+            android:layout="@layout/widget_stack"
+            android:layout_width="match_parent"
+            android:layout_height="160dp"
+            android:layout_marginHorizontal="16dp"
+            android:inflatedId="@+id/widgetStack" />
 
     </LinearLayout>
 

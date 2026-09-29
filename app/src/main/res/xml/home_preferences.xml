@@ -247,6 +247,52 @@
         android:layout_height="wrap_content"
         app:allowDividerAbove="false"
         app:allowDividerBelow="false"
+        app:title="@string/now_playing">
+        <SwitchPreference
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:defaultValue="false"
+            android:summary="@string/now_playing_summary"
+            android:title="@string/show_now_playing"
+            app:key="nowPlayingEnabled" />
+    </PreferenceCategory>
+    <PreferenceCategory
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        app:allowDividerAbove="false"
+        app:allowDividerBelow="false"
+        app:title="@string/widget_stack">
+        <SwitchPreference
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:defaultValue="false"
+            android:summary="@string/widget_stack_summary"
+            android:title="@string/show_widget_stack"
+            app:key="widgetStackEnabled" />
+        <Preference
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            app:dependency="widgetStackEnabled"
+            app:key="widgetStackWidgets"
+            app:selectable="true"
+            app:title="@string/widget_stack_widgets" />
+        <SeekBarPreference
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:defaultValue="160"
+            android:max="500"
+            app:dependency="widgetStackEnabled"
+            app:key="widgetStackHeight"
+            app:min="80"
+            app:seekBarIncrement="10"
+            app:showSeekBarValue="true"
+            app:title="@string/widget_stack_height" />
+    </PreferenceCategory>
+    <PreferenceCategory
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        app:allowDividerAbove="false"
+        app:allowDividerBelow="false"
         app:title="@string/gestures">
         <SwitchPreference
             android:layout_width="wrap_content"

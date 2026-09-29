@@ -5,9 +5,11 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.graphics.drawable.Drawable
+import android.media.session.MediaSession
 import android.os.Build
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import androidx.core.os.BundleCompat
 import eu.ottop.yamlauncher.utils.Logger
 
 /**
@@ -138,5 +140,31 @@ class NotificationListener : NotificationListenerService() {
      */
     fun getPackagesWithNotifications(): Set<String> {
         return activeNotifications.map { it.packageName }.toSet()
+    }
+
+    /**
+     * Cancels the media notification bound to [token], if the app allows it.
+     * Ongoing (foreground service) notifications cannot be cleared by a listener,
+     * which matches what the system's own dismiss button is able to do.
+     *
+     * @return true if a matching notification was cancelled
+     */
+    fun cancelMediaNotification(token: MediaSession.Token): Boolean {
+        return try {
+            val target = activeNotifications?.firstOrNull { sbn ->
+                val sessionToken = BundleCompat.getParcelable(
+                    sbn.notification.extras,
+                    Notification.EXTRA_MEDIA_SESSION,
+                    MediaSession.Token::class.java
+                )
+                sessionToken == token
+            } ?: return false
+            if (!target.isClearable) return false
+            cancelNotification(target.key)
+            true
+        } catch (e: Exception) {
+            logger.w("NotificationListener", "Failed to cancel media notification: ${e.message}")
+            false
+        }
     }
 }

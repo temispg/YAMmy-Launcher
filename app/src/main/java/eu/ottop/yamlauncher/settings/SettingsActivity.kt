@@ -111,6 +111,14 @@ class SettingsActivity : AppCompatActivity() {
 
     }
 
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        // AppWidgetHost can only launch widget configuration through the Activity result path.
+        (supportFragmentManager.findFragmentById(R.id.settingsLayout) as? WidgetPickerFragment)
+            ?.onConfigureResult(requestCode, resultCode)
+    }
+
     override fun onSupportNavigateUp(): Boolean {
         if (supportFragmentManager.backStackEntryCount > 0) {
             supportFragmentManager.popBackStack()

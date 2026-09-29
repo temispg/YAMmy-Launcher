@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<eu.ottop.yamlauncher.views.NowPlayingView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingVertical="8dp"
+    tools:showIn="@layout/activity_main">
+
+    <ImageView
+        android:id="@+id/nowPlayingArt"
+        android:layout_width="@dimen/now_playing_art_size"
+        android:layout_height="@dimen/now_playing_art_size"
+        android:background="@drawable/now_playing_art_background"
+        android:contentDescription="@string/now_playing_album_art"
+        android:padding="0dp"
+        android:scaleType="centerCrop"
+        tools:src="@drawable/music_note_24px" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
+        android:layout_marginEnd="4dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/nowPlayingTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="marquee"
+            android:fadingEdgeLength="16dp"
+            android:marqueeRepeatLimit="marquee_forever"
+            android:requiresFadingEdge="horizontal"
+            android:singleLine="true"
+            android:textAppearance="@android:style/TextAppearance.DeviceDefault"
+            android:textColor="#F3F3F3"
+            android:textSize="16sp"
+            tools:text="Track title" />
+
+        <TextView
+            android:id="@+id/nowPlayingArtist"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:alpha="0.75"
+            android:ellipsize="end"
+            android:singleLine="true"
+            android:textAppearance="@android:style/TextAppearance.DeviceDefault"
+            android:textColor="#F3F3F3"
+            android:textSize="13sp"
+            tools:text="Artist" />
+
+    </LinearLayout>
+
+    <ImageView
+        android:id="@+id/nowPlayingPrevious"
+        android:layout_width="@dimen/now_playing_control_size"
+        android:layout_height="@dimen/now_playing_control_size"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:clickable="true"
+        android:contentDescription="@string/now_playing_previous"
+        android:focusable="true"
+        android:padding="8dp"
+        android:scaleType="fitCenter"
+        android:src="@drawable/skip_previous_24px" />
+
+    <ImageView
+        android:id="@+id/nowPlayingPlayPause"
+        android:layout_width="@dimen/now_playing_control_size"
+        android:layout_height="@dimen/now_playing_control_size"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:clickable="true"
+        android:contentDescription="@string/now_playing_play"
+        android:focusable="true"
+        android:padding="6dp"
+        android:scaleType="fitCenter"
+        android:src="@drawable/play_arrow_24px" />
+
+    <ImageView
+        android:id="@+id/nowPlayingNext"
+        android:layout_width="@dimen/now_playing_control_size"
+        android:layout_height="@dimen/now_playing_control_size"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:clickable="true"
+        android:contentDescription="@string/now_playing_next"
+        android:focusable="true"
+        android:padding="8dp"
+        android:scaleType="fitCenter"
+        android:src="@drawable/skip_next_24px" />
+
+</eu.ottop.yamlauncher.views.NowPlayingView>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Chevron for a collapsible app group; rotated by AppGroupPreference when expanded. -->
+<ImageView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/expandIndicator"
+    android:layout_width="24dp"
+    android:layout_height="24dp"
+    android:layout_gravity="center"
+    android:importantForAccessibility="no"
+    android:src="@drawable/expand_more_24px"
+    app:tint="?android:attr/textColorSecondary" />

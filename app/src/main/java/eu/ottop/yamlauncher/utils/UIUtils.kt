@@ -36,6 +36,8 @@ import androidx.fragment.app.FragmentActivity
 import com.google.android.material.textfield.TextInputEditText
 import eu.ottop.yamlauncher.R
 import eu.ottop.yamlauncher.settings.SharedPreferenceManager
+import eu.ottop.yamlauncher.views.NowPlayingView
+import eu.ottop.yamlauncher.views.WidgetStackView
 
 /**
  * UI utility class for managing view styling and layout.
@@ -192,6 +194,10 @@ class UIUtils(private val context: Context) {
     private fun applyColorsRecursively(view: View, color: Int, shadowEnabled: Boolean) {
         when (view) {
             is TextView -> applyTextColor(view, color, shadowEnabled)
+            // Handled as a unit so the album art bitmap is never tinted.
+            is NowPlayingView -> view.applyTheme(color) { applyTextColor(it, color, shadowEnabled) }
+            // Hosted app widgets keep their own styling; only the page dots follow the theme.
+            is WidgetStackView -> view.dotColor = color
             is ImageView -> view.drawable?.mutate()?.setTint(color)
             is ViewGroup -> view.children.forEach { child ->
                 applyColorsRecursively(child, color, shadowEnabled)
@@ -284,6 +290,7 @@ class UIUtils(private val context: Context) {
      */
     fun setTextFont(view: View, typeface: Typeface?) {
         when (view) {
+            is WidgetStackView -> Unit
             is ViewGroup -> view.children.forEach { setTextFont(it, typeface) }
             is TextView -> view.typeface = typeface
         }

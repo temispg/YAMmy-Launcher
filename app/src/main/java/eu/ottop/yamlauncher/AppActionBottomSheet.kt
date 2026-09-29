@@ -16,6 +16,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
+import eu.ottop.yamlauncher.settings.AppFolder
 import eu.ottop.yamlauncher.settings.SharedPreferenceManager
 import eu.ottop.yamlauncher.utils.AppNameResolver
 
@@ -42,6 +43,14 @@ class AppActionBottomSheet : BottomSheetDialogFragment() {
         fun onRenameApp(appActivity: LauncherActivityInfo, userHandle: UserHandle, workProfile: Int)
         /** Hide app from launcher */
         fun onHideApp(appActivity: LauncherActivityInfo, workProfile: Int)
+        /** Add the app to (or remove it from) folders */
+        fun onAddToFolder(appActivity: LauncherActivityInfo, workProfile: Int)
+    }
+
+    /** Folder mode shows only rename and delete. */
+    interface FolderActionListener {
+        fun onRenameFolder(folder: AppFolder)
+        fun onDeleteFolder(folder: AppFolder)
     }
 
     private lateinit var sharedPreferenceManager: SharedPreferenceManager
@@ -54,6 +63,8 @@ class AppActionBottomSheet : BottomSheetDialogFragment() {
     private var userHandle: UserHandle? = null
     private var workProfile: Int = 0
     private var listener: AppActionListener? = null
+    private var folder: AppFolder? = null
+    private var folderListener: FolderActionListener? = null
 
     companion object {
         const val TAG = "AppActionBottomSheet"
@@ -91,6 +102,14 @@ class AppActionBottomSheet : BottomSheetDialogFragment() {
             fragment.workProfile = workProfile
             return fragment
         }
+
+        /** Like the app listener, this isn't restorable; a recreated sheet dismisses itself. */
+        fun newInstance(folder: AppFolder, listener: FolderActionListener): AppActionBottomSheet {
+            val fragment = AppActionBottomSheet()
+            fragment.folder = folder
+            fragment.folderListener = listener
+            return fragment
+        }
     }
 
     override fun onCreateDialog(savedInstanceState: Bundle?): Dialog {
@@ -109,6 +128,13 @@ class AppActionBottomSheet : BottomSheetDialogFragment() {
         super.onViewCreated(view, savedInstanceState)
 
         sharedPreferenceManager = SharedPreferenceManager(requireContext())
+
+        val currentFolder = folder
+        val currentFolderListener = folderListener
+        if (currentFolder != null && currentFolderListener != null) {
+            setupFolderButtons(view, currentFolder, currentFolderListener)
+            return
+        }
 
         // Restore app data if fragment was recreated
         if (appActivity == null) {
@@ -185,6 +211,10 @@ class AppActionBottomSheet : BottomSheetDialogFragment() {
             listener.onPinApp(appActivity, workProfile)
         }
 
+        setupButton(view.findViewById(R.id.folder), true) {
+            listener.onAddToFolder(appActivity, workProfile)
+        }
+
         setupButton(infoButton, enableInfo) {
             listener.onAppInfo(appActivity, userHandle)
         }
@@ -201,6 +231,25 @@ class AppActionBottomSheet : BottomSheetDialogFragment() {
         setupButton(hideButton, enableHide) {
             listener.onHideApp(appActivity, workProfile)
         }
+    }
+
+    /**
+     * Reuses the rename and uninstall (as delete) buttons for a folder. They are shown
+     * regardless of the per-app context menu preferences, which only cover app actions.
+     */
+    private fun setupFolderButtons(view: View, folder: AppFolder, listener: FolderActionListener) {
+        view.findViewById<TextView>(R.id.appNameTitle).text = folder.name
+        val renameButton = view.findViewById<LinearLayout>(R.id.rename)
+        val deleteButton = view.findViewById<LinearLayout>(R.id.uninstall)
+
+        // The adjacent labels already say what each button does; the app-specific descriptions would be wrong.
+        renameButton.findViewById<ImageView>(R.id.renameIcon).contentDescription = null
+        deleteButton.findViewById<ImageView>(R.id.uninstallIcon).contentDescription = null
+        deleteButton.findViewById<TextView>(R.id.uninstallLabel).setText(R.string.delete)
+
+        setupButton(renameButton, true) { listener.onRenameFolder(folder) }
+        setupButton(deleteButton, true) { listener.onDeleteFolder(folder) }
+        listOf(R.id.pin, R.id.folder, R.id.info, R.id.hide).forEach { view.findViewById<View>(it).visibility = View.GONE }
     }
 
     /**
@@ -227,6 +276,7 @@ class AppActionBottomSheet : BottomSheetDialogFragment() {
         super.onDetach()
         // Clear listener reference to prevent memory leaks
         listener = null
+        folderListener = null
     }
 
     /**

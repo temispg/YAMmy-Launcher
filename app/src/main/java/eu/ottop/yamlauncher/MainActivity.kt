@@ -20,10 +20,12 @@ package eu.ottop.yamlauncher
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.SearchManager
+import android.appwidget.AppWidgetHost
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.ContentResolver
 import android.content.Context
+import android.content.DialogInterface
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.LauncherActivityInfo
@@ -46,14 +48,17 @@ import android.provider.ContactsContract
 import android.provider.Settings
 import android.text.Editable
 import android.text.TextWatcher
+import android.view.ContextThemeWrapper
 import android.view.GestureDetector
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextClock
@@ -62,6 +67,7 @@ import android.widget.Toast
 import android.widget.ViewSwitcher
 import androidx.appcompat.widget.AppCompatButton
 import androidx.activity.OnBackPressedCallback
+import androidx.annotation.StringRes
 import androidx.appcompat.app.AppCompatActivity
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.edit
@@ -70,20 +76,24 @@ import androidx.core.database.getStringOrNull
 import androidx.core.view.ViewCompat
 import androidx.core.view.isVisible
 import androidx.core.view.marginLeft
+import androidx.core.view.updateLayoutParams
 import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.preference.PreferenceManager
 import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.textfield.TextInputEditText
 import eu.ottop.yamlauncher.databinding.ActivityMainBinding
+import eu.ottop.yamlauncher.settings.AppFolder
 import eu.ottop.yamlauncher.settings.SettingsActivity
 import eu.ottop.yamlauncher.settings.ShortcutSetting
 import eu.ottop.yamlauncher.settings.SharedPreferenceManager
 import eu.ottop.yamlauncher.tasks.BatteryReceiver
 import eu.ottop.yamlauncher.tasks.NotificationEventBus
 import eu.ottop.yamlauncher.tasks.NotificationListener
+import eu.ottop.yamlauncher.tasks.NowPlayingManager
 import eu.ottop.yamlauncher.tasks.ScreenLockService
 import eu.ottop.yamlauncher.utils.Animations
 import eu.ottop.yamlauncher.utils.AppMenuEdgeFactory
@@ -99,6 +109,8 @@ import eu.ottop.yamlauncher.utils.StringUtils
 import eu.ottop.yamlauncher.utils.UIUtils
 import eu.ottop.yamlauncher.utils.WeatherSystem
 import eu.ottop.yamlauncher.views.AlphabetIndexView
+import eu.ottop.yamlauncher.views.NowPlayingView
+import eu.ottop.yamlauncher.views.WidgetStackView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -110,7 +122,8 @@ import kotlin.math.abs
 
 class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceChangeListener, AppMenuAdapter.OnItemClickListener,
     AppMenuAdapter.OnShortcutListener, AppMenuAdapter.OnItemLongClickListener, ContactsAdapter.OnContactClickListener,
-    ContactsAdapter.OnContactShortcutListener, AppActionBottomSheet.AppActionListener {
+    ContactsAdapter.OnContactShortcutListener, AppActionBottomSheet.AppActionListener, AppMenuAdapter.OnFolderListener,
+    AppActionBottomSheet.FolderActionListener {
 
     /**
      * Resource IDs for the 15 home screen shortcut slots.
@@ -168,11 +181,22 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
     private lateinit var launcherApps: LauncherApps
     private lateinit var installedApps: List<Triple<LauncherActivityInfo, UserHandle, Int>>
     private var currentFilteredApps: List<Triple<LauncherActivityInfo, UserHandle, Int>> = listOf()
+    /** Decoded once and kept sorted in memory; preferences are only touched when folders change. */
+    private var folders: List<AppFolder> = emptyList()
 
     private lateinit var preferences: SharedPreferences
 
     private var isBatteryReceiverRegistered = false
     private var notificationCollectionJob: Job? = null
+    /** Created on first use; only registered with the system while the activity is started. */
+    private var nowPlayingManager: NowPlayingManager? = null
+    /** Inflated from the ViewStub the first time something plays. */
+    private var nowPlayingView: NowPlayingView? = null
+    /** Created on first use; only listening for widget updates while the activity is started. */
+    private var appWidgetHost: AppWidgetHost? = null
+    private var isWidgetHostListening = false
+    /** Inflated from the ViewStub the first time the widget stack is enabled. */
+    private var widgetStackView: WidgetStackView? = null
     private var isSearchActive = false
     private var isInitialOpen = false
     private var canLaunchShortcut = true
@@ -238,6 +262,11 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
 
     private val handler = Handler(Looper.getMainLooper())
 
+    /** Lets home-screen widgets mirror touches into the home gesture detector (swipe up, long press, double tap). */
+    private val homeGestureForwarder: (MotionEvent) -> Unit = { event ->
+        if (!isDrawerOpen && !animations.isInAnim) gestureDetector.onTouchEvent(event)
+    }
+
     /**
      * Called when the activity is first created.
      * Initializes view binding, utilities, preferences, listeners, and starts background tasks.
@@ -270,6 +299,8 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         setPreferences()
 
         setHomeListeners()
+
+        updateWidgetStack()
 
         // Task to update the app menu every 5 seconds to detect newly installed/removed apps.
         // The first launch already populates `installedApps` via `setupApps()`; the initial
@@ -331,6 +362,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         uiUtils = UIUtils(this@MainActivity)
         gestureUtils = GestureUtils(this@MainActivity)
         sharedPreferenceManager = SharedPreferenceManager(this@MainActivity)
+        showFolders(sharedPreferenceManager.getFolders())
         animations = Animations(this@MainActivity)
 
         gestureDetector = GestureDetector(this, GestureListener())
@@ -537,6 +569,17 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
             return
         }
 
+        val folderId = AppFolder.idFromComponentKey(savedView.componentName)
+        if (folderId != null) {
+            val icon = ResourcesCompat.getDrawable(resources, R.drawable.folder_15px, null)
+                ?.mutate()?.apply { setTint(sharedPreferenceManager.getTextColor()) }
+            textView.setCompoundDrawablesWithIntrinsicBounds(icon, null, null, null)
+            textView.setOnClickListener {
+                if (canLaunchShortcut) openFolder(folderId)
+            }
+            return
+        }
+
         if (savedView.profile != 0) {
             textView.setCompoundDrawablesWithIntrinsicBounds(ResourcesCompat.getDrawable(resources, R.drawable.ic_work_app, null), null, null, null)
         }
@@ -733,8 +776,8 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
     private fun handleLaunchOrFallback(
         target: Pair<LauncherActivityInfo?, Int?>,
         gestureKey: String,
+        requireGestureEnabled: Boolean = true,
         fallback: () -> Unit,
-        requireGestureEnabled: Boolean = true
     ) {
         val (activity, profileIndex) = target
         if (
@@ -812,14 +855,14 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
     }
 
     private fun openWeatherApp() {
-        handleLaunchOrFallback(weatherApp, "weather", {
+        handleLaunchOrFallback(weatherApp, "weather", requireGestureEnabled = false) {
             val intent = Intent(Intent.makeMainSelectorActivity(Intent.ACTION_MAIN, Intent.CATEGORY_APP_WEATHER))
             if (intent.resolveActivity(packageManager) != null) {
                 startActivity(intent)
             } else {
                 Toast.makeText(this, getString(R.string.no_weather_app), Toast.LENGTH_SHORT).show()
             }
-        }, requireGestureEnabled = false)
+        }
     }
 
     private fun openBatterySettings() {
@@ -989,7 +1032,9 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
             "isRestored" -> {
                 preferences.edit { remove("isRestored") }
                 setPreferences()
+                showFolders(sharedPreferenceManager.getFolders())
                 setShortcuts()
+                updateWidgetStack()
             }
 
             "contactsEnabled" -> {
@@ -1028,7 +1073,122 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
                     setShortcuts()
                 }
             }
+
+            "nowPlayingEnabled" -> {
+                if (sharedPreferenceManager.isNowPlayingEnabled()) {
+                    // Only attach while visible; onStart handles the background case.
+                    if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) startNowPlaying()
+                } else {
+                    nowPlayingManager?.stop()
+                }
+            }
+
+            "widgetStackEnabled", "widgetStackIds", "widgetStackHeight" -> updateWidgetStack()
         }
+    }
+
+    // ============================================
+    // Widget stack
+    // ============================================
+
+    private fun updateWidgetStack() {
+        if (!sharedPreferenceManager.isWidgetStackEnabled()) {
+            stopWidgetHost()
+            widgetStackView?.let {
+                it.setWidgets(null, emptyList())
+                it.visibility = View.GONE
+            }
+            return
+        }
+        val host = appWidgetHost ?: AppWidgetHost(this, WidgetStackView.HOST_ID).also { appWidgetHost = it }
+        if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) startWidgetHost()
+
+        val view = widgetStackView ?: inflateWidgetStack()
+        view.updateLayoutParams {
+            height = (sharedPreferenceManager.getWidgetStackHeightDp() * resources.displayMetrics.density).toInt()
+        }
+        view.setWidgets(host, sharedPreferenceManager.getWidgetStackIds())
+        view.visibility = if (view.pageCount == 0) View.GONE else View.VISIBLE
+    }
+
+    private fun inflateWidgetStack(): WidgetStackView {
+        val view = binding.widgetStackStub.inflate() as WidgetStackView
+        widgetStackView = view
+        view.dotColor = sharedPreferenceManager.getTextColor()
+        view.homeGestureForwarder = homeGestureForwarder
+        return view
+    }
+
+    private fun startWidgetHost() {
+        val host = appWidgetHost ?: return
+        if (isWidgetHostListening) return
+        try {
+            host.startListening()
+            isWidgetHostListening = true
+        } catch (e: Exception) {
+            logger.w("MainActivity", "Failed to start listening for widget updates: ${e.message}")
+        }
+    }
+
+    private fun stopWidgetHost() {
+        if (!isWidgetHostListening) return
+        try {
+            appWidgetHost?.stopListening()
+        } catch (e: Exception) {
+            logger.w("MainActivity", "Failed to stop listening for widget updates: ${e.message}")
+        }
+        isWidgetHostListening = false
+    }
+
+    // ============================================
+    // Now Playing widget
+    // ============================================
+
+    private fun startNowPlaying() {
+        if (!sharedPreferenceManager.isNowPlayingEnabled()) return
+        val manager = nowPlayingManager ?: NowPlayingManager(
+            this,
+            lifecycleScope,
+            resources.getDimensionPixelSize(R.dimen.now_playing_art_size),
+            object : NowPlayingManager.Listener {
+                override fun onNowPlayingChanged(info: NowPlayingManager.NowPlayingInfo?) {
+                    showNowPlaying(info)
+                }
+            }
+        ).also { nowPlayingManager = it }
+        manager.start()
+    }
+
+    private fun showNowPlaying(info: NowPlayingManager.NowPlayingInfo?) {
+        if (info == null) {
+            nowPlayingView?.let {
+                it.clear()
+                it.visibility = View.GONE
+            }
+            return
+        }
+        val view = nowPlayingView ?: inflateNowPlayingView()
+        view.bind(info)
+        view.visibility = View.VISIBLE
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun inflateNowPlayingView(): NowPlayingView {
+        val view = binding.nowPlayingStub.inflate() as NowPlayingView
+        nowPlayingView = view
+
+        view.listener = object : NowPlayingView.Listener {
+            override fun onPlayPause() { nowPlayingManager?.playPause() }
+            override fun onSkipToNext() { nowPlayingManager?.skipToNext() }
+            override fun onSkipToPrevious() { nowPlayingManager?.skipToPrevious() }
+            override fun onDismiss() { nowPlayingManager?.dismiss() }
+        }
+        // Keep swipe-up / long-press / double-tap working over the widget, same as homeView.
+        view.homeGestureForwarder = homeGestureForwarder
+
+        uiUtils.setTextColors(view)
+        uiUtils.setTextFont(view, uiUtils.resolveTypeface())
+        return view
     }
 
     fun modifyDate(value: String, index: Int) {
@@ -1281,7 +1441,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         }
 
         if (targetPosition >= 0) {
-            appRecycler.scrollToPosition(targetPosition)
+            appRecycler.scrollToPosition(appAdapter?.adapterPositionOfApp(targetPosition) ?: targetPosition)
         }
     }
 
@@ -1302,10 +1462,11 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
     }
 
     private suspend fun setupAppRecycler(newApps: MutableList<Triple<LauncherActivityInfo, UserHandle, Int>>) {
-        appAdapter = AppMenuAdapter(this@MainActivity, binding, newApps, this@MainActivity, this@MainActivity, this@MainActivity, launcherApps)
+        appAdapter = AppMenuAdapter(this@MainActivity, binding, newApps, this@MainActivity, this@MainActivity, this@MainActivity, this@MainActivity, launcherApps)
         appMenuLinearLayoutManager.stackFromEnd = true
         appRecycler = binding.appRecycler
         withContext(Dispatchers.Main) {
+            appAdapter?.setFolders(folders)
             appRecycler.layoutManager = appMenuLinearLayoutManager
             appRecycler.edgeEffectFactory = appMenuEdgeFactory
             appRecycler.adapter = appAdapter
@@ -1659,6 +1820,8 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         try {
             unregisterBatteryReceiver()
             unregisterNotificationReceiver()
+            nowPlayingManager?.stop()
+            stopWidgetHost()
             preferences.unregisterOnSharedPreferenceChangeListener(this)
             searchJob?.cancel()
             curboxApiClient.disconnect()
@@ -1736,6 +1899,16 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         super.onStart()
         // Keyboard is sometimes open when going back to the app, so close it.
         closeKeyboard()
+        startNowPlaying()
+        if (sharedPreferenceManager.isWidgetStackEnabled()) startWidgetHost()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // Drop every media session callback while not visible: zero idle cost.
+        nowPlayingManager?.stop()
+        // Same for widget updates: providers stop pushing RemoteViews to a stopped host.
+        stopWidgetHost()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -1861,6 +2034,8 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         logger.i("MainActivity", "App ${appActivity.label} ${if (isPinned) "pinned" else "unpinned"}")
         lifecycleScope.launch {
             refreshAppMenu()
+            // The refresh skips unchanged orderings; re-push so pin icons and the Pinned section update.
+            updateMenu(currentFilteredApps)
         }
     }
 
@@ -2037,7 +2212,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         for (i in 0 until appsToSearch.size) {
             val tuple = appsToSearch.getOrNull(i)
             if (tuple?.first?.componentName == appActivity.componentName && tuple.third == workProfile) {
-                return i
+                return appAdapter?.adapterPositionOfApp(i) ?: i
             }
         }
         return -1
@@ -2049,6 +2224,162 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
             sharedPreferenceManager.setAppHidden(appActivity.componentName.flattenToString(), workProfile, true)
             refreshAppMenu()
         }
+    }
+
+    // ============================================
+    // Folders
+    // ============================================
+
+    private fun showFolders(newFolders: List<AppFolder>) {
+        folders = newFolders.sortedBy { it.name.lowercase() }
+        appAdapter?.setFolders(folders)
+    }
+
+    private fun saveFolders(newFolders: List<AppFolder>) {
+        sharedPreferenceManager.setFolders(newFolders)
+        showFolders(newFolders)
+    }
+
+    private fun dialogContext() = ContextThemeWrapper(
+        this,
+        com.google.android.material.R.style.Theme_MaterialComponents_DayNight_NoActionBar
+    )
+
+    private fun folderDialog() = MaterialAlertDialogBuilder(dialogContext())
+
+    /** Lists the folder's apps in drawer order; hidden or uninstalled members are skipped. */
+    private fun folderApps(folder: AppFolder): List<Triple<LauncherActivityInfo, UserHandle, Int>> {
+        if (!::installedApps.isInitialized) return emptyList()
+        val members = folder.apps.toHashSet()
+        return installedApps.filter { (it.first.componentName.flattenToString() to it.third) in members }
+    }
+
+    private fun openFolder(id: Long) {
+        val folder = folders.firstOrNull { it.id == id }
+        if (folder == null) {
+            Toast.makeText(this, getString(R.string.folder_missing), Toast.LENGTH_SHORT).show()
+            return
+        }
+        onFolderClick(folder)
+    }
+
+    override fun onFolderClick(folder: AppFolder) {
+        val members = folderApps(folder)
+        val builder = folderDialog().setTitle(folder.name)
+        if (members.isEmpty()) {
+            builder.setMessage(R.string.folder_empty)
+        } else {
+            val names = members.map { (info, _, profile) ->
+                sharedPreferenceManager.getAppName(
+                    info.componentName.flattenToString(),
+                    profile,
+                    AppNameResolver.resolveBaseLabel(this, info)
+                ) ?: info.label
+            }.toTypedArray()
+            builder.setItems(names) { _, which -> onItemClick(members[which].first, members[which].second) }
+        }
+        builder.show()
+    }
+
+    override fun onFolderLongClick(folder: AppFolder) {
+        AppActionBottomSheet.newInstance(folder, this).show(supportFragmentManager, AppActionBottomSheet.TAG)
+    }
+
+    override fun onRenameFolder(folder: AppFolder) {
+        promptFolderName(R.string.rename_folder, folder.name) { name ->
+            saveFolders(folders.map { if (it.id == folder.id) it.copy(name = name) else it })
+        }
+    }
+
+    override fun onDeleteFolder(folder: AppFolder) {
+        folderDialog()
+            .setTitle(R.string.delete_folder)
+            .setMessage(getString(R.string.delete_folder_confirm, folder.name))
+            .setPositiveButton(R.string.delete) { _, _ ->
+                saveFolders(folders.filter { it.id != folder.id })
+            }
+            .setNegativeButton(R.string.confirm_no, null)
+            .show()
+    }
+
+    override fun onFolderShortcut(folder: AppFolder, shortcutView: TextView, shortcutIndex: Int) {
+        val setting = ShortcutSetting(AppFolder.componentKey(folder.id), 0, folder.name, false)
+        sharedPreferenceManager.setShortcut(shortcutIndex, setting.label, setting.componentName, setting.profile)
+        setShortcutSetup(shortcutView, setting)
+        uiUtils.setDrawables(shortcutView, sharedPreferenceManager.getShortcutAlignment())
+        backToHome()
+    }
+
+    /**
+     * With no folders, goes straight to naming a new one. Otherwise shows every folder with the
+     * app's current membership checked; toggling applies immediately, so this also removes apps.
+     */
+    override fun onAddToFolder(appActivity: LauncherActivityInfo, workProfile: Int) {
+        val app = appActivity.componentName.flattenToString() to workProfile
+        val createFolderWithApp = {
+            promptFolderName(R.string.new_folder, "") { name ->
+                saveFolders(folders + AppFolder(System.currentTimeMillis(), name, listOf(app)))
+            }
+        }
+        val snapshot = folders
+        if (snapshot.isEmpty()) {
+            createFolderWithApp()
+            return
+        }
+        val checked = BooleanArray(snapshot.size) { app in snapshot[it].apps }
+        folderDialog()
+            .setTitle(R.string.add_to_folder)
+            .setMultiChoiceItems(snapshot.map { it.name }.toTypedArray(), checked) { _, which, isChecked ->
+                val id = snapshot[which].id
+                saveFolders(folders.map { folder ->
+                    if (folder.id != id) folder
+                    else folder.copy(apps = if (isChecked) (folder.apps + app).distinct() else folder.apps - app)
+                })
+            }
+            .setNeutralButton(R.string.new_folder) { _, _ -> createFolderWithApp() }
+            .setPositiveButton(R.string.done, null)
+            .show()
+    }
+
+    private fun promptFolderName(@StringRes title: Int, initialName: String, onName: (String) -> Unit) {
+        val context = dialogContext()
+        val input = EditText(context).apply {
+            setText(initialName)
+            setSelection(initialName.length)
+            hint = getString(R.string.folder_name)
+            isSingleLine = true
+            imeOptions = EditorInfo.IME_ACTION_DONE
+        }
+        val padding = (20 * resources.displayMetrics.density).toInt()
+        val container = FrameLayout(context).apply {
+            setPadding(padding, padding / 2, padding, 0)
+            addView(input)
+        }
+        val dialog = folderDialog()
+            .setTitle(title)
+            .setView(container)
+            .setPositiveButton(R.string.save, null)
+            .setNegativeButton(R.string.confirm_no, null)
+            .create()
+        dialog.setOnShowListener {
+            // Replaces the default listener so an empty name keeps the dialog open.
+            val save = dialog.getButton(DialogInterface.BUTTON_POSITIVE)
+            save.setOnClickListener {
+                val name = AppFolder.sanitizeName(input.text.toString())
+                if (name.isEmpty()) {
+                    input.error = getString(R.string.empty_rename)
+                } else {
+                    onName(name)
+                    dialog.dismiss()
+                }
+            }
+            input.setOnEditorActionListener { _, actionId, _ ->
+                (actionId == EditorInfo.IME_ACTION_DONE).also { if (it) save.performClick() }
+            }
+            input.requestFocus()
+        }
+        dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+        dialog.show()
     }
 
     /**

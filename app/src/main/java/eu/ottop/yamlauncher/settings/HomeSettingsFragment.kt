@@ -34,8 +34,10 @@ class HomeSettingsFragment : PreferenceFragmentCompat(), TitleProvider {
     private var clockApp: Preference? = null
     private var dateApp: Preference? = null
     private var notificationDotsPref: SwitchPreference? = null
+    private var nowPlayingPref: SwitchPreference? = null
     private var screenTimePref: SwitchPreference? = null
     private var weatherAppPref: Preference? = null
+    private var widgetStackWidgetsPref: Preference? = null
 
     private val curboxPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -60,12 +62,20 @@ class HomeSettingsFragment : PreferenceFragmentCompat(), TitleProvider {
         doubleTapActionPref = findPreference("doubleTapAction")
         doubleTapAppPref = findPreference("doubleTapSwipeApp")
         notificationDotsPref = findPreference("notificationDots")
+        nowPlayingPref = findPreference("nowPlayingEnabled")
         screenTimePref = findPreference("screenTimeEnabled")
         weatherAppPref = findPreference("weatherSwipeApp")
+        widgetStackWidgetsPref = findPreference("widgetStackWidgets")
 
         weatherAppPref?.onPreferenceClickListener =
             Preference.OnPreferenceClickListener {
                 uiUtils.switchFragment(requireActivity(), GestureAppsFragment.newInstance("weather"))
+                true
+            }
+
+        widgetStackWidgetsPref?.onPreferenceClickListener =
+            Preference.OnPreferenceClickListener {
+                uiUtils.switchFragment(requireActivity(), WidgetPickerFragment())
                 true
             }
 
@@ -158,17 +168,18 @@ class HomeSettingsFragment : PreferenceFragmentCompat(), TitleProvider {
                 true
             }
 
-        // Notification dots permission handling
-        notificationDotsPref?.onPreferenceChangeListener =
-            Preference.OnPreferenceChangeListener { _, newValue ->
-                val enabled = newValue as? Boolean ?: return@OnPreferenceChangeListener false
-                if (enabled && !NotificationListener.isEnabled(requireContext())) {
-                    NotificationListener.requestPermission(requireContext())
-                    false
-                } else {
-                    true
-                }
+        // Notification dots and Now Playing both need notification listener access
+        val requireListenerAccess = Preference.OnPreferenceChangeListener { _, newValue ->
+            val enabled = newValue as? Boolean ?: return@OnPreferenceChangeListener false
+            if (enabled && !NotificationListener.isEnabled(requireContext())) {
+                NotificationListener.requestPermission(requireContext())
+                false
+            } else {
+                true
             }
+        }
+        notificationDotsPref?.onPreferenceChangeListener = requireListenerAccess
+        nowPlayingPref?.onPreferenceChangeListener = requireListenerAccess
 
         updateDoubleTapAppPreferenceState()
     }
@@ -189,6 +200,8 @@ class HomeSettingsFragment : PreferenceFragmentCompat(), TitleProvider {
         rightSwipePref?.summary = sharedPreferenceManager.getGestureName("right")
         doubleTapAppPref?.summary = sharedPreferenceManager.getGestureName("doubleTap")
         weatherAppPref?.summary = sharedPreferenceManager.getGestureName("weather")
+        val widgetCount = sharedPreferenceManager.getWidgetStackIds().size
+        widgetStackWidgetsPref?.summary = resources.getQuantityString(R.plurals.widget_stack_count, widgetCount, widgetCount)
 
         updateDoubleTapAppPreferenceState()
     }

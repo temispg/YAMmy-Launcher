@@ -16,12 +16,14 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.annotation.StringRes
 import androidx.core.content.res.ResourcesCompat
 import androidx.core.view.ViewCompat
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.textfield.TextInputEditText
 import eu.ottop.yamlauncher.databinding.ActivityMainBinding
+import eu.ottop.yamlauncher.settings.AppFolder
 import eu.ottop.yamlauncher.settings.SharedPreferenceManager
 import eu.ottop.yamlauncher.utils.AppNameResolver
 import eu.ottop.yamlauncher.utils.AppUtils
@@ -39,29 +41,42 @@ import eu.ottop.yamlauncher.utils.UIUtils
  * - Shortcut selection mode
  * - Accessibility actions
  */
-class AppDiffCallback(
-    private val oldList: List<Triple<LauncherActivityInfo, UserHandle, Int>>,
-    private val newList: List<Triple<LauncherActivityInfo, UserHandle, Int>>
+private sealed interface DrawerRow {
+    data class Header(@StringRes val title: Int) : DrawerRow
+    data class App(val entry: Triple<LauncherActivityInfo, UserHandle, Int>, val pinned: Boolean) : DrawerRow
+    data class Folder(val folder: AppFolder) : DrawerRow
+}
+
+private class DrawerRowDiffCallback(
+    private val oldList: List<DrawerRow>,
+    private val newList: List<DrawerRow>
 ) : DiffUtil.Callback() {
 
     override fun getOldListSize() = oldList.size
     override fun getNewListSize() = newList.size
 
-    /**
-     * Checks if items represent the same app.
-     * Uses component name and profile index for comparison.
-     */
+    /** Apps match on component name and profile index, folders on their stable id. */
     override fun areItemsTheSame(oldPos: Int, newPos: Int): Boolean {
-        return oldList[oldPos].first.componentName == newList[newPos].first.componentName &&
-               oldList[oldPos].third == newList[newPos].third
+        val old = oldList[oldPos]
+        val new = newList[newPos]
+        return when (old) {
+            is DrawerRow.Header -> new is DrawerRow.Header && old.title == new.title
+            is DrawerRow.App -> new is DrawerRow.App &&
+                old.entry.first.componentName == new.entry.first.componentName &&
+                old.entry.third == new.entry.third
+            is DrawerRow.Folder -> new is DrawerRow.Folder && old.folder.id == new.folder.id
+        }
     }
 
-    /**
-     * Checks if item contents have changed.
-     * Compares app labels for content changes.
-     */
     override fun areContentsTheSame(oldPos: Int, newPos: Int): Boolean {
-        return oldList[oldPos].first.label == newList[newPos].first.label
+        val old = oldList[oldPos]
+        val new = newList[newPos]
+        return when (old) {
+            is DrawerRow.Header -> true
+            is DrawerRow.App -> new is DrawerRow.App && old.pinned == new.pinned &&
+                old.entry.first.label == new.entry.first.label
+            is DrawerRow.Folder -> new is DrawerRow.Folder && old.folder.name == new.folder.name
+        }
     }
 }
 
@@ -70,17 +85,21 @@ class AppDiffCallback(
  * Supports multiple interaction modes:
  * - Normal: Click to launch, long-press for actions
  * - Shortcut selection: Click to assign to shortcut slot
+ *
+ * Outside search the list is split into Pinned, Folders and All apps sections, each with a
+ * header only when it has rows. Search results are a flat list of apps.
  */
 class AppMenuAdapter(
     private val activity: MainActivity,
     binding: ActivityMainBinding,
-    private var apps: MutableList<Triple<LauncherActivityInfo, UserHandle, Int>>,
+    private var apps: List<Triple<LauncherActivityInfo, UserHandle, Int>>,
     private val itemClickListener: OnItemClickListener,
     private val shortcutListener: OnShortcutListener,
     private val itemLongClickListener: OnItemLongClickListener,
+    private val folderListener: OnFolderListener,
     launcherApps: LauncherApps
 ) :
-    RecyclerView.Adapter<AppMenuAdapter.AppViewHolder>() {
+    RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
     // When set, clicking an app assigns it to this shortcut slot
     var shortcutIndex: Int = 0
@@ -90,6 +109,12 @@ class AppMenuAdapter(
     private val uiUtils = UIUtils(activity)
     private val appUtils = AppUtils(activity, launcherApps)
     private val logger = Logger.getInstance(activity)
+
+    private var folders: List<AppFolder> = emptyList()
+    private var isSectioned = true
+    private var rows: List<DrawerRow> = emptyList()
+    // Adapter position of each entry in [apps], since headers and folders sit between them.
+    private var appRowPositions = IntArray(0)
 
     private var cachedTextColor: Int = sharedPreferenceManager.getTextColor()
     private var cachedTextShadowEnabled: Boolean = sharedPreferenceManager.isTextShadowEnabled()
@@ -104,8 +129,16 @@ class AppMenuAdapter(
     private val drawablePinFilled: Drawable? = ResourcesCompat.getDrawable(activity.resources, R.drawable.keep_filled_15px, null)
     private val drawablePin: Drawable? = ResourcesCompat.getDrawable(activity.resources, R.drawable.keep_15px, null)
     private val drawableWork: Drawable? = ResourcesCompat.getDrawable(activity.resources, R.drawable.ic_work_app, null)
+    // Tinted once here rather than per bind; every folder row shares this instance.
+    private val drawableFolder: Drawable? = ResourcesCompat.getDrawable(activity.resources, R.drawable.folder_15px, null)
+        ?.mutate()?.apply { setTint(cachedTextColor) }
+
+    init {
+        setRows(buildRows())
+    }
 
     fun onPreferencesChanged() {
+        drawableFolder?.setTint(sharedPreferenceManager.getTextColor())
         cachedTextColor = sharedPreferenceManager.getTextColor()
         cachedTextShadowEnabled = sharedPreferenceManager.isTextShadowEnabled()
         cachedContactsEnabled = sharedPreferenceManager.areContactsEnabled()
@@ -147,9 +180,18 @@ class AppMenuAdapter(
         )
     }
 
+    /** Folder row interactions; shortcut mode assigns the folder to a home slot instead of opening it. */
+    interface OnFolderListener {
+        fun onFolderClick(folder: AppFolder)
+        fun onFolderLongClick(folder: AppFolder)
+        fun onFolderShortcut(folder: AppFolder, shortcutView: TextView, shortcutIndex: Int)
+    }
+
     // ============================================
     // ViewHolder
     // ============================================
+
+    class HeaderViewHolder(val textView: TextView) : RecyclerView.ViewHolder(textView)
 
     inner class AppViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
         // Container for the list item
@@ -183,44 +225,50 @@ class AppMenuAdapter(
 
             // Single tap behavior depends on mode
             textView.setOnClickListener {
-                val position = bindingAdapterPosition
-                if (position < 0 || position >= apps.size) {
-                    return@setOnClickListener
-                }
-                val entry = apps[position]
-                val app = entry.first
-
-                // If in shortcut selection mode, assign to shortcut instead of launching
                 val localShortcut = shortcutTextView
-                if (localShortcut != null) {
-                    shortcutListener.onShortcut(app, entry.second, textView, entry.third, localShortcut, shortcutIndex)
-                }
-                else {
-                    itemClickListener.onItemClick(app, entry.second)
+                when (val row = rows.getOrNull(bindingAdapterPosition)) {
+                    is DrawerRow.Folder -> {
+                        if (localShortcut != null) {
+                            folderListener.onFolderShortcut(row.folder, localShortcut, shortcutIndex)
+                        } else {
+                            folderListener.onFolderClick(row.folder)
+                        }
+                    }
+                    is DrawerRow.App -> {
+                        val entry = row.entry
+                        // If in shortcut selection mode, assign to shortcut instead of launching
+                        if (localShortcut != null) {
+                            shortcutListener.onShortcut(entry.first, entry.second, textView, entry.third, localShortcut, shortcutIndex)
+                        } else {
+                            itemClickListener.onItemClick(entry.first, entry.second)
+                        }
+                    }
+                    else -> Unit
                 }
             }
 
             // Long press opens action menu or assigns shortcut
             textView.setOnLongClickListener {
-                val position = bindingAdapterPosition
-                if (position < 0 || position >= apps.size) {
-                    return@setOnLongClickListener true
-                }
-
-                val entry = apps[position]
-                val app = entry.first
-
-                // In shortcut mode, long press also assigns
                 val localShortcut = shortcutTextView
-                if (localShortcut != null) {
-                    shortcutListener.onShortcut(app, entry.second, textView, entry.third, localShortcut, shortcutIndex)
-                } else {
-                    // Normal mode: show action menu
-                    itemLongClickListener.onItemLongClick(
-                        app,
-                        entry.second,
-                        entry.third
-                    )
+                when (val row = rows.getOrNull(bindingAdapterPosition)) {
+                    is DrawerRow.Folder -> {
+                        if (localShortcut != null) {
+                            folderListener.onFolderShortcut(row.folder, localShortcut, shortcutIndex)
+                        } else {
+                            folderListener.onFolderLongClick(row.folder)
+                        }
+                    }
+                    is DrawerRow.App -> {
+                        val entry = row.entry
+                        // In shortcut mode, long press also assigns
+                        if (localShortcut != null) {
+                            shortcutListener.onShortcut(entry.first, entry.second, textView, entry.third, localShortcut, shortcutIndex)
+                        } else {
+                            // Normal mode: show action menu
+                            itemLongClickListener.onItemLongClick(entry.first, entry.second, entry.third)
+                        }
+                    }
+                    else -> Unit
                 }
                 true
             }
@@ -241,45 +289,78 @@ class AppMenuAdapter(
     // Adapter Methods
     // ============================================
 
-    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): AppViewHolder {
-        val view = LayoutInflater.from(parent.context)
-            .inflate(R.layout.app_item_layout, parent, false)
-        return AppViewHolder(view)
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
+        val inflater = LayoutInflater.from(parent.context)
+        if (viewType == VIEW_TYPE_HEADER) {
+            return HeaderViewHolder(inflater.inflate(R.layout.app_section_header, parent, false) as TextView)
+        }
+        return AppViewHolder(inflater.inflate(R.layout.app_item_layout, parent, false))
     }
 
-    override fun onBindViewHolder(holder: AppViewHolder, position: Int) {
-        holder.editView.visibility = View.INVISIBLE
-        if (position < 0 || position >= apps.size) {
-            return
+    override fun getItemViewType(position: Int): Int = when (rows[position]) {
+        is DrawerRow.Header -> VIEW_TYPE_HEADER
+        is DrawerRow.App -> VIEW_TYPE_APP
+        is DrawerRow.Folder -> VIEW_TYPE_FOLDER
+    }
+
+    override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
+        when (val row = rows.getOrNull(position)) {
+            is DrawerRow.Header -> if (holder is HeaderViewHolder) bindHeader(holder.textView, row.title)
+            is DrawerRow.Folder -> if (holder is AppViewHolder) bindFolder(holder, row.folder)
+            is DrawerRow.App -> if (holder is AppViewHolder) bindApp(holder, row)
+            null -> Unit
         }
-        val app = apps[position]
+    }
+
+    private fun bindHeader(header: TextView, @StringRes title: Int) {
+        header.setText(title)
+        header.typeface = cachedTypeface
+        applyTextColor(header)
+    }
+
+    private fun bindFolder(holder: AppViewHolder, folder: AppFolder) {
+        holder.editView.visibility = View.INVISIBLE
+        holder.textView.setCompoundDrawablesWithIntrinsicBounds(drawableFolder, null, drawableEmpty, null)
+        styleRow(holder)
+        holder.textView.text = folder.name
+        holder.textView.visibility = View.VISIBLE
+    }
+
+    private fun styleRow(holder: AppViewHolder) {
+        uiUtils.setAppAlignment(holder.textView, cachedAlignment, holder.editText)
+        uiUtils.setAppSize(holder.textView, cachedSize, holder.editText)
+        uiUtils.setItemSpacing(holder.textView, cachedSpacing)
+        uiUtils.setTextFont(holder.listItem, cachedTypeface)
+        applyTextColor(holder.textView)
+    }
+
+    private fun applyTextColor(textView: TextView) {
+        textView.setTextColor(cachedTextColor)
+        if (cachedTextShadowEnabled) {
+            textView.setShadowLayer(4f, 2f, 2f, android.graphics.Color.BLACK)
+        } else {
+            textView.setShadowLayer(0f, 0f, 0f, android.graphics.Color.TRANSPARENT)
+        }
+    }
+
+    private fun bindApp(holder: AppViewHolder, row: DrawerRow.App) {
+        holder.editView.visibility = View.INVISIBLE
+        val app = row.entry
         val appComponent = app.first.componentName.flattenToString()
-        val isPinned = sharedPreferenceManager.isAppPinned(appComponent, app.third)
 
         // mutate() each drawable to avoid cross-item colorFilter leakage since
         // ResourcesCompat.getDrawable returns shared instances.
         val tint = BlendModeColorFilter(cachedTextColor, BlendMode.SRC_ATOP)
         val leftDrawable = when {
-            isPinned && app.third != 0 -> drawablePinFilled
-            isPinned -> drawablePin
+            row.pinned && app.third != 0 -> drawablePinFilled
+            row.pinned -> drawablePin
             app.third != 0 -> drawableWork
             else -> drawableEmpty
         }?.mutate()?.apply { colorFilter = tint }
 
         holder.textView.setCompoundDrawablesWithIntrinsicBounds(leftDrawable, null, drawableEmpty, null)
 
-        // Apply styling from preferences
-        uiUtils.setAppAlignment(holder.textView, cachedAlignment, holder.editText)
-        uiUtils.setAppSize(holder.textView, cachedSize, holder.editText)
-        uiUtils.setItemSpacing(holder.textView, cachedSpacing)
-        uiUtils.setTextFont(holder.listItem, cachedTypeface)
-
-        holder.textView.setTextColor(cachedTextColor)
-        if (cachedTextShadowEnabled) {
-            holder.textView.setShadowLayer(4f, 2f, 2f, android.graphics.Color.BLACK)
-        } else {
-            holder.textView.setShadowLayer(0f, 0f, 0f, android.graphics.Color.TRANSPARENT)
-        }
+        styleRow(holder)
 
         // Set app name or removal placeholder
         if (appUtils.isAppInstalled(app.first.applicationInfo.packageName, app.third)) {
@@ -298,7 +379,52 @@ class AppMenuAdapter(
     }
 
     override fun getItemCount(): Int {
-        return apps.size
+        return rows.size
+    }
+
+    /** Maps an index in the current app list to its adapter position, or -1. */
+    fun adapterPositionOfApp(appIndex: Int): Int = appRowPositions.getOrElse(appIndex) { -1 }
+
+    /** Pinned state is read once per rebuild here instead of once per bind. */
+    private fun buildRows(): List<DrawerRow> {
+        val pinned = sharedPreferenceManager.getPinnedApps()
+        val appRows = apps.map { DrawerRow.App(it, (it.first.componentName.flattenToString() to it.third) in pinned) }
+        if (!isSectioned) return appRows
+
+        // Apps arrive sorted with pinned ones first.
+        val pinnedCount = appRows.indexOfFirst { !it.pinned }.let { if (it < 0) appRows.size else it }
+        val rows = ArrayList<DrawerRow>(appRows.size + folders.size + 3)
+        if (pinnedCount > 0) {
+            rows += DrawerRow.Header(R.string.pinned_section)
+            rows += appRows.subList(0, pinnedCount)
+        }
+        if (folders.isNotEmpty()) {
+            rows += DrawerRow.Header(R.string.folders)
+            folders.mapTo(rows) { DrawerRow.Folder(it) }
+        }
+        if (pinnedCount < appRows.size) {
+            if (rows.isNotEmpty()) rows += DrawerRow.Header(R.string.all_apps)
+            rows += appRows.subList(pinnedCount, appRows.size)
+        }
+        return rows
+    }
+
+    private fun setRows(newRows: List<DrawerRow>) {
+        rows = newRows
+        appRowPositions = newRows.indices.filter { newRows[it] is DrawerRow.App }.toIntArray()
+    }
+
+    private fun diffToRows(newRows: List<DrawerRow>) {
+        val diffResult = DiffUtil.calculateDiff(DrawerRowDiffCallback(rows, newRows))
+        setRows(newRows)
+        diffResult.dispatchUpdatesTo(this)
+    }
+
+    /** Folders are only listed in the sectioned (non-search) view. */
+    fun setFolders(newFolders: List<AppFolder>) {
+        if (newFolders == folders) return
+        folders = newFolders
+        if (isSectioned) diffToRows(buildRows())
     }
 
     /**
@@ -308,11 +434,9 @@ class AppMenuAdapter(
      * @param newApps New list of apps
      */
     fun updateApps(newApps: List<Triple<LauncherActivityInfo, UserHandle, Int>>) {
-        val diffCallback = AppDiffCallback(apps, newApps)
-        val diffResult = DiffUtil.calculateDiff(diffCallback)
-
-        apps = newApps.toMutableList()
-        diffResult.dispatchUpdatesTo(this)
+        apps = newApps
+        isSectioned = true
+        diffToRows(buildRows())
     }
 
     /**
@@ -323,7 +447,15 @@ class AppMenuAdapter(
      */
     @SuppressLint("NotifyDataSetChanged")
     fun setApps(newApps: List<Triple<LauncherActivityInfo, UserHandle, Int>>) {
-        apps = newApps.toMutableList()
+        apps = newApps
+        isSectioned = false
+        setRows(buildRows())
         notifyDataSetChanged()
+    }
+
+    private companion object {
+        const val VIEW_TYPE_APP = 0
+        const val VIEW_TYPE_HEADER = 1
+        const val VIEW_TYPE_FOLDER = 2
     }
 }

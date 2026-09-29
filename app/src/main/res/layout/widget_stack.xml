@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Bottom padding is the page indicator band; pages are clipped above it. -->
+<eu.ottop.yamlauncher.views.WidgetStackView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="160dp"
+    android:overScrollMode="never"
+    android:paddingBottom="@dimen/widget_stack_indicator_height"
+    android:scrollbars="none"
+    tools:showIn="@layout/activity_main" />

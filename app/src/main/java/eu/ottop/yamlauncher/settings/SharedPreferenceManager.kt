@@ -260,9 +260,29 @@ class SharedPreferenceManager(private val context: Context) {
     fun isNotificationDotsEnabled(): Boolean = store.boolean("notificationDots", false)
 
     /**
+     * Checks if the Now Playing media widget is enabled.
+     */
+    fun isNowPlayingEnabled(): Boolean = store.boolean("nowPlayingEnabled", false)
+
+    /**
      * Checks if hidden apps should be shown in shortcut selection.
      */
     fun showHiddenShortcuts(): Boolean = store.boolean("showHiddenShortcuts", true)
+
+    // ============================================
+    // Widget Stack Preferences
+    // ============================================
+
+    /** Checks if the bottom widget stack is enabled. */
+    fun isWidgetStackEnabled(): Boolean = store.boolean("widgetStackEnabled", false)
+
+    /** Gets the widget stack height in dp. */
+    fun getWidgetStackHeightDp(): Int = store.intFromString("widgetStackHeight", 160, 80..500)
+
+    /** Gets the bound app widget ids shown in the stack, in display order. */
+    fun getWidgetStackIds(): List<Int> = WidgetStackIds.decode(store.string("widgetStackIds", ""))
+
+    fun setWidgetStackIds(ids: List<Int>) = store.putString("widgetStackIds", WidgetStackIds.encode(ids))
 
     // ============================================
     // Pinned Apps Preferences
@@ -283,7 +303,7 @@ class SharedPreferenceManager(private val context: Context) {
         store.putString("pinnedApps", encoded)
     }
 
-    private fun getPinnedApps(): Set<Pair<String, Int>> {
+    fun getPinnedApps(): Set<Pair<String, Int>> {
         return store.string("pinnedApps", "")
             .split("§section§")
             .mapNotNull { item ->
@@ -302,6 +322,14 @@ class SharedPreferenceManager(private val context: Context) {
     fun isAppPinned(componentName: String, profile: Int): Boolean {
         return componentName to profile in getPinnedApps()
     }
+
+    // ============================================
+    // App Folders
+    // ============================================
+
+    fun getFolders(): List<AppFolder> = AppFolder.decode(store.string("appFolders", ""))
+
+    fun setFolders(folders: List<AppFolder>) = store.putString("appFolders", AppFolder.encode(folders))
 
     // ============================================
     // Battery/Status

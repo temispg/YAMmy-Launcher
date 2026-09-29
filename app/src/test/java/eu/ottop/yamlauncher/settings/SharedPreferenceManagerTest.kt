@@ -60,6 +60,44 @@ class SharedPreferenceManagerTest {
     }
 
     @Test
+    fun widgetStackIds_roundTripAndDropJunk() {
+        assertEquals(listOf(3, 7), WidgetStackIds.decode(WidgetStackIds.encode(listOf(3, 7, 3, 0))))
+        assertEquals(listOf(5, 9), WidgetStackIds.decode("5, x,0,-2, 9,5"))
+        assertTrue(WidgetStackIds.decode(null).isEmpty())
+        assertTrue(WidgetStackIds.decode("").isEmpty())
+    }
+
+    @Test
+    fun appFolder_roundTripsAndSanitizesNames() {
+        val folders = listOf(
+            AppFolder(1, "Work", listOf("a.b/a.b.Main" to 0, "c.d/c.d.Main" to 1)),
+            AppFolder(2, "Empty", emptyList()),
+        )
+        assertEquals(folders, AppFolder.decode(AppFolder.encode(folders)))
+        val tricky = AppFolder(3, "  Games §folder§ §splitter§x ", emptyList())
+        assertEquals("Games folder splitterx", AppFolder.decode(AppFolder.encode(listOf(tricky))).single().name)
+    }
+
+    @Test
+    fun appFolder_dropsCorruptEntries() {
+        assertTrue(AppFolder.decode(null).isEmpty())
+        assertTrue(AppFolder.decode("").isEmpty())
+        val decoded = AppFolder.decode(
+            "bad§splitter§§splitter§Name§folder§" +
+                "5§splitter§x/y§profile§-1§app§a/b§profile§2§app§a/b§profile§2§splitter§Ok§folder§" +
+                "5§splitter§§splitter§Duplicate id§folder§6§splitter§§splitter§   "
+        )
+        assertEquals(listOf(AppFolder(5, "Ok", listOf("a/b" to 2))), decoded)
+    }
+
+    @Test
+    fun appFolder_componentKeyRoundTrips() {
+        assertEquals(42L, AppFolder.idFromComponentKey(AppFolder.componentKey(42)))
+        assertNull(AppFolder.idFromComponentKey("com.example/com.example.Main"))
+        assertNull(AppFolder.idFromComponentKey("folder:oops"))
+    }
+
+    @Test
     fun gestureSetting_rejectsMissingOrInvalidFields() {
         assertEquals(
             GestureSetting("Example §splitter§ Work", "example/app.Main", 0),

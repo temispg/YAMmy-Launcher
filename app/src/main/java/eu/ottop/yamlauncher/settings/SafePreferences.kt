@@ -128,6 +128,7 @@ internal object PreferenceSchema {
         "searchSize" to "medium",
         "appSpacing" to "20",
         "alphabetIndexPosition" to "right",
+        "widgetStackIds" to "",
     )
 
     val booleanDefaults = mapOf(
@@ -138,6 +139,7 @@ internal object PreferenceSchema {
         "blockAutoRotation" to false, "lockSettings" to false,
         "clockEnabled" to true, "dateEnabled" to true,
         "lockShortcuts" to false, "notificationDots" to false,
+        "nowPlayingEnabled" to false, "widgetStackEnabled" to false,
         "showHiddenShortcuts" to true, "batteryEnabled" to false,
         "weatherEnabled" to false, "gpsLocation" to false,
         "clockClick" to true, "dateClick" to true,
@@ -188,6 +190,55 @@ internal data class GestureSetting(val name: String, val componentName: String, 
             return GestureSetting(name, componentName, profile)
         }
     }
+}
+
+/**
+ * A user-created group of apps. Members are (flattened component, profile index) pairs.
+ * The id is stable across renames so home shortcuts can reference the folder.
+ */
+data class AppFolder(val id: Long, val name: String, val apps: List<Pair<String, Int>>) {
+    companion object {
+        private const val FOLDER_SEPARATOR = "§folder§"
+        private const val FIELD_SEPARATOR = "§splitter§"
+        private const val APP_SEPARATOR = "§app§"
+        private const val PROFILE_SEPARATOR = "§profile§"
+        // ':' is not allowed in package names, so this can never collide with a real component.
+        private const val COMPONENT_PREFIX = "folder:"
+
+        fun encode(folders: List<AppFolder>): String = folders.joinToString(FOLDER_SEPARATOR) { folder ->
+            val apps = folder.apps.joinToString(APP_SEPARATOR) { (component, profile) -> "$component$PROFILE_SEPARATOR$profile" }
+            listOf(folder.id, apps, sanitizeName(folder.name)).joinToString(FIELD_SEPARATOR)
+        }
+
+        fun decode(raw: String?): List<AppFolder> = raw.orEmpty().split(FOLDER_SEPARATOR).mapNotNull { item ->
+            val parts = item.split(FIELD_SEPARATOR, limit = 3)
+            val id = parts.getOrNull(0)?.toLongOrNull() ?: return@mapNotNull null
+            val name = parts.getOrNull(2)?.let(::sanitizeName)?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            val apps = parts[1].split(APP_SEPARATOR).mapNotNull { app ->
+                val fields = app.split(PROFILE_SEPARATOR)
+                val profile = fields.getOrNull(1)?.toIntOrNull()?.takeIf { it >= 0 }
+                fields[0].takeIf { it.isNotBlank() && fields.size == 2 }?.let { component -> profile?.let { component to it } }
+            }.distinct()
+            AppFolder(id, name, apps)
+        }.distinctBy { it.id }
+
+        /** Strips the separator character so a user-typed name can't corrupt the encoding. */
+        fun sanitizeName(name: String): String = name.replace("§", "").trim()
+
+        /** Stands in for a component name in home shortcut settings. */
+        fun componentKey(id: Long): String = "$COMPONENT_PREFIX$id"
+
+        fun idFromComponentKey(componentName: String): Long? =
+            componentName.takeIf { it.startsWith(COMPONENT_PREFIX) }?.removePrefix(COMPONENT_PREFIX)?.toLongOrNull()
+    }
+}
+
+/** Comma-separated bound app widget ids in display order; ids are positive and unique. */
+internal object WidgetStackIds {
+    fun encode(ids: List<Int>): String = ids.filter { it > 0 }.distinct().joinToString(",")
+
+    fun decode(raw: String?): List<Int> =
+        raw.orEmpty().split(',').mapNotNull { it.trim().toIntOrNull() }.filter { it > 0 }.distinct()
 }
 
 internal object WeatherIntervalParser {
