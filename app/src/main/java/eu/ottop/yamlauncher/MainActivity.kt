@@ -1182,9 +1182,14 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
             override fun onSkipToNext() { nowPlayingManager?.skipToNext() }
             override fun onSkipToPrevious() { nowPlayingManager?.skipToPrevious() }
             override fun onDismiss() { nowPlayingManager?.dismiss() }
+            override fun onOpen() { nowPlayingManager?.openApp() }
         }
-        // Keep swipe-up / long-press / double-tap working over the widget, same as homeView.
-        view.homeGestureForwarder = homeGestureForwarder
+        // Keep swipe-up / long-press / double-tap working over the widget, same as homeView,
+        // with single tap opening the player.
+        val nowPlayingGestureDetector = GestureDetector(this, NowPlayingGestureListener())
+        view.homeGestureForwarder = { event ->
+            if (!isDrawerOpen && !animations.isInAnim) nowPlayingGestureDetector.onTouchEvent(event)
+        }
 
         uiUtils.setTextColors(view)
         uiUtils.setTextFont(view, uiUtils.resolveTypeface())
@@ -2532,6 +2537,13 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
                 DateSection.BATTERY -> openBatterySettings()
                 null -> openDateApp()
             }
+            return true
+        }
+    }
+
+    private inner class NowPlayingGestureListener : GestureListener() {
+        override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+            nowPlayingManager?.openApp()
             return true
         }
     }

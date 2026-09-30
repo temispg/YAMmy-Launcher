@@ -1,7 +1,9 @@
 package eu.ottop.yamlauncher.tasks
 
+import android.app.ActivityOptions
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadata
@@ -9,6 +11,8 @@ import android.media.session.MediaController
 import android.media.session.MediaSession
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
+import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -136,6 +140,30 @@ class NowPlayingManager(
     fun skipToPrevious() {
         runCatching { activeController?.transportControls?.skipToPrevious() }
             .onFailure { logger.w("NowPlayingManager", "skipToPrevious failed: ${it.message}") }
+    }
+
+    /** Opens the player screen the session advertises, else the app's launcher activity. */
+    fun openApp() {
+        val controller = activeController ?: return
+        val sentSessionActivity = controller.sessionActivity?.let { pendingIntent ->
+            runCatching { pendingIntent.send(context, 0, null, null, null, null, allowBackgroundStartOptions()) }
+                .onFailure { logger.w("NowPlayingManager", "sessionActivity failed: ${it.message}") }
+                .isSuccess
+        } == true
+        if (sentSessionActivity) return
+
+        val launchIntent = context.packageManager.getLaunchIntentForPackage(controller.packageName) ?: return
+        runCatching { context.startActivity(launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            .onFailure { logger.w("NowPlayingManager", "Launching ${controller.packageName} failed: ${it.message}") }
+    }
+
+    // Since Android 14 the sender must opt in to lend its foreground state to another app's PendingIntent.
+    @Suppress("DEPRECATION")
+    private fun allowBackgroundStartOptions(): Bundle? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return null
+        return ActivityOptions.makeBasic()
+            .setPendingIntentBackgroundActivityStartMode(ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED)
+            .toBundle()
     }
 
     /**

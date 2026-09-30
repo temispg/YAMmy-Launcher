@@ -6,6 +6,7 @@
     android:gravity="center_vertical"
     android:orientation="horizontal"
     android:paddingVertical="8dp"
+    android:stateListAnimator="@animator/press_scale_row"
     tools:showIn="@layout/activity_main">
 
     <ImageView
@@ -64,7 +65,8 @@
         android:focusable="true"
         android:padding="8dp"
         android:scaleType="fitCenter"
-        android:src="@drawable/skip_previous_24px" />
+        android:src="@drawable/skip_previous_24px"
+        android:stateListAnimator="@animator/press_scale_control" />
 
     <ImageView
         android:id="@+id/nowPlayingPlayPause"
@@ -76,7 +78,8 @@
         android:focusable="true"
         android:padding="6dp"
         android:scaleType="fitCenter"
-        android:src="@drawable/play_arrow_24px" />
+        android:src="@drawable/play_arrow_24px"
+        android:stateListAnimator="@animator/press_scale_control" />
 
     <ImageView
         android:id="@+id/nowPlayingNext"
@@ -88,6 +91,7 @@
         android:focusable="true"
         android:padding="8dp"
         android:scaleType="fitCenter"
-        android:src="@drawable/skip_next_24px" />
+        android:src="@drawable/skip_next_24px"
+        android:stateListAnimator="@animator/press_scale_control" />
 
 </eu.ottop.yamlauncher.views.NowPlayingView>

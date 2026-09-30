@@ -73,8 +73,9 @@ private class DrawerRowDiffCallback(
         val new = newList[newPos]
         return when (old) {
             is DrawerRow.Header -> true
-            is DrawerRow.App -> new is DrawerRow.App && old.pinned == new.pinned &&
-                old.entry.first.label == new.entry.first.label
+            // Rows render the cached AppNameResolver label; LauncherActivityInfo.label loads the
+            // other app's resources, which on the main thread stalls the drawer close animation.
+            is DrawerRow.App -> new is DrawerRow.App && old.pinned == new.pinned
             is DrawerRow.Folder -> new is DrawerRow.Folder && old.folder.name == new.folder.name
         }
     }

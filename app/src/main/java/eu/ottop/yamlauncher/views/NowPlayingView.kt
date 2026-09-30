@@ -37,6 +37,7 @@ class NowPlayingView @JvmOverloads constructor(
         fun onSkipToNext()
         fun onSkipToPrevious()
         fun onDismiss()
+        fun onOpen()
     }
 
     var listener: Listener? = null
@@ -84,6 +85,14 @@ class NowPlayingView @JvmOverloads constructor(
             listener?.onDismiss()
             true
         }
+        ViewCompat.replaceAccessibilityAction(
+            this,
+            AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_CLICK,
+            null
+        ) { _, _ ->
+            listener?.onOpen()
+            true
+        }
     }
 
     fun bind(info: NowPlayingInfo) {
@@ -113,6 +122,7 @@ class NowPlayingView @JvmOverloads constructor(
     /** Drops the bitmap reference so nothing is retained while hidden. */
     fun clear() {
         artView.setImageDrawable(null)
+        releasePress()
         translationX = 0f
         alpha = 1f
         isAnimatingOut = false
@@ -166,15 +176,15 @@ class NowPlayingView @JvmOverloads constructor(
         return false
     }
 
-    // The row itself has no click action; taps are either on the (accessible) control
-    // buttons or forwarded to the home gesture detector, and dismiss is exposed via
-    // ACTION_DISMISS above.
+    // Taps on the row are detected by the forwarded gesture detector (so double tap still
+    // works); accessibility gets the same open/dismiss actions via ACTION_CLICK/ACTION_DISMISS.
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (isAnimatingOut) return true
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 beginTracking(event)
+                isPressed = true
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
@@ -212,6 +222,12 @@ class NowPlayingView @JvmOverloads constructor(
         velocityTracker?.recycle()
         velocityTracker = null
         isDragging = false
+        releasePress()
+    }
+
+    // setPressed(false) always propagates to children, which would cancel a held control's click.
+    private fun releasePress() {
+        if (isPressed) isPressed = false
     }
 
     private fun shouldStartDrag(ev: MotionEvent): Boolean {
@@ -222,6 +238,7 @@ class NowPlayingView @JvmOverloads constructor(
 
     private fun startDrag() {
         isDragging = true
+        releasePress()
         parent?.requestDisallowInterceptTouchEvent(true)
         if (forwardGesture) {
             val cancel = MotionEvent.obtain(0L, 0L, MotionEvent.ACTION_CANCEL, 0f, 0f, 0)
