@@ -187,12 +187,4 @@ class Logger private constructor(private val context: Context) {
     }
 
     fun getLogFileSize(): Long = logFile.length()
-
-    /**
-     * Shuts down the logger executor service.
-     * Call this when the app is terminating to prevent memory leaks.
-     */
-    fun shutdown() {
-        logExecutor.shutdown()
-    }
 }

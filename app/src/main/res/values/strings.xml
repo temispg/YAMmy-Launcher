@@ -58,7 +58,6 @@
     <string name="add_to_folder">Add to folder</string>
     <string name="new_folder">New folder</string>
     <string name="folder_name">Folder name</string>
-    <string name="rename_folder">Rename folder</string>
     <string name="delete_folder">Delete folder</string>
     <string name="delete">Delete</string>
     <string name="delete_folder_confirm">Delete \"%1$s\"? The apps inside are not affected.</string>

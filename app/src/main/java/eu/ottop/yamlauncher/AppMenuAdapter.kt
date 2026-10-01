@@ -324,6 +324,7 @@ class AppMenuAdapter(
         holder.textView.setCompoundDrawablesWithIntrinsicBounds(drawableFolder, null, drawableEmpty, null)
         styleRow(holder)
         holder.textView.text = folder.name
+        holder.editText.setText(folder.name)
         holder.textView.visibility = View.VISIBLE
     }
 
@@ -385,6 +386,8 @@ class AppMenuAdapter(
 
     /** Maps an index in the current app list to its adapter position, or -1. */
     fun adapterPositionOfApp(appIndex: Int): Int = appRowPositions.getOrElse(appIndex) { -1 }
+
+    fun adapterPositionOfFolder(id: Long): Int = rows.indexOfFirst { it is DrawerRow.Folder && it.folder.id == id }
 
     /** Pinned state is read once per rebuild here instead of once per bind. */
     private fun buildRows(): List<DrawerRow> {

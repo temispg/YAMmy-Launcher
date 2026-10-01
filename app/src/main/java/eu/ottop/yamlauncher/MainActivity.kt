@@ -20,6 +20,7 @@ package eu.ottop.yamlauncher
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.SearchManager
+import android.app.role.RoleManager
 import android.appwidget.AppWidgetHost
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
@@ -67,7 +68,6 @@ import android.widget.Toast
 import android.widget.ViewSwitcher
 import androidx.appcompat.widget.AppCompatButton
 import androidx.activity.OnBackPressedCallback
-import androidx.annotation.StringRes
 import androidx.appcompat.app.AppCompatActivity
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.edit
@@ -1834,7 +1834,6 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
             logger.w("MainActivity", "Error during onDestroy cleanup: ${e.message}")
         }
         logger.i("MainActivity", "MainActivity destroyed")
-        Logger.getInstance(this).shutdown()
     }
 
     private fun registerNotificationReceiver() {
@@ -1959,7 +1958,11 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
     }
 
     private fun isDefaultLauncher(): Boolean {
-        val packageManager = packageManager
+        // The HOME role is what Settings shows; the legacy preferred activity can be dropped
+        // (e.g. after this launcher crashes) while the role is still held.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            return getSystemService(RoleManager::class.java).isRoleHeld(RoleManager.ROLE_HOME)
+        }
         val intent = Intent(Intent.ACTION_MAIN).apply {
             addCategory(Intent.CATEGORY_HOME)
         }
@@ -2079,24 +2082,40 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
     }
 
     override fun onRenameApp(appActivity: LauncherActivityInfo, userHandle: UserHandle, workProfile: Int) {
-        // Find the view holder for this app and trigger rename mode
-        val position = findAppPosition(appActivity, workProfile)
-        if (position != -1) {
-            val viewHolder = appRecycler.findViewHolderForAdapterPosition(position) as? AppMenuAdapter.AppViewHolder
-            if (viewHolder != null) {
-                startRenameMode(viewHolder.textView, viewHolder.editView, appActivity, userHandle, workProfile)
-            } else {
-                // View holder is null (view recycled), scroll to position and try again
-                appRecycler.layoutManager?.scrollToPosition(position)
-                appRecycler.post {
-                    val retryViewHolder = appRecycler.findViewHolderForAdapterPosition(position) as? AppMenuAdapter.AppViewHolder
-                    if (retryViewHolder != null) {
-                        startRenameMode(retryViewHolder.textView, retryViewHolder.editView, appActivity, userHandle, workProfile)
-                    } else {
-                        // Still can't get view holder, show error toast
-                        Toast.makeText(this@MainActivity, getString(R.string.rename_error), Toast.LENGTH_SHORT).show()
-                    }
+        val componentName = appActivity.componentName.flattenToString()
+        withDrawerRow(findAppPosition(appActivity, workProfile)) { holder ->
+            startRenameMode(
+                holder,
+                onSave = { newName ->
+                    sharedPreferenceManager.setAppName(componentName, workProfile, newName)
+                    logger.i("MainActivity", "App renamed from '${appActivity.label}' to '$newName'")
+                    appSearchIndexDirty = true
+                    lifecycleScope.launch { applySearch() }
+                },
+                onReset = {
+                    sharedPreferenceManager.resetAppName(componentName, workProfile)
+                    appSearchIndexDirty = true
+                    lifecycleScope.launch { applySearch() }
                 }
+            )
+        }
+    }
+
+    /** Runs [action] on the drawer row at [position], scrolling it into view first if it was recycled. */
+    private fun withDrawerRow(position: Int, action: (AppMenuAdapter.AppViewHolder) -> Unit) {
+        if (position == -1) return
+        val holder = appRecycler.findViewHolderForAdapterPosition(position) as? AppMenuAdapter.AppViewHolder
+        if (holder != null) {
+            action(holder)
+            return
+        }
+        appRecycler.layoutManager?.scrollToPosition(position)
+        appRecycler.post {
+            val retryHolder = appRecycler.findViewHolderForAdapterPosition(position) as? AppMenuAdapter.AppViewHolder
+            if (retryHolder != null) {
+                action(retryHolder)
+            } else {
+                Toast.makeText(this@MainActivity, getString(R.string.rename_error), Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -2104,112 +2123,64 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
     private var renameLayoutListener: View.OnLayoutChangeListener? = null
 
     /**
-     * Initiates rename mode for an app, showing an edit field for custom naming.
-     * Automatically exits when the keyboard is closed or action is confirmed.
-     * Supports resetting to the original app name via the reset button.
+     * Swaps a drawer row's label for its inline edit field. Closing the keyboard cancels.
+     * [onSave] persists a non-blank name; [onReset] restores the default name, and the reset
+     * button is hidden when there is no default. The row is rebound afterwards to show the result.
      */
-    private fun startRenameMode(textView: TextView, editLayout: LinearLayout, appActivity: LauncherActivityInfo, userHandle: UserHandle, workProfile: Int) {
+    private fun startRenameMode(holder: AppMenuAdapter.AppViewHolder, onSave: (String) -> Unit, onReset: (() -> Unit)?) {
+        val textView = holder.textView
+        val editLayout = holder.editView
+        val editText = holder.editText
+        val resetButton = editLayout.findViewById<AppCompatButton>(R.id.reset)
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        val searchEnabled = sharedPreferenceManager.isSearchEnabled()
+
         disableAppMenuScroll()
         textView.visibility = View.INVISIBLE
         animations.fadeViewIn(editLayout)
-        val editText = editLayout.findViewById<EditText>(R.id.appNameEdit)
-        val resetButton = editLayout.findViewById<AppCompatButton>(R.id.reset)
+        resetButton.isVisible = onReset != null
+        searchView.visibility = if (searchEnabled) View.INVISIBLE else View.GONE
+        editText.requestFocus()
+        handler.postDelayed({ imm.showSoftInput(editText, InputMethodManager.SHOW_IMPLICIT) }, 100)
 
-        val searchEnabled = sharedPreferenceManager.isSearchEnabled()
-
-        if (searchEnabled) {
-            searchView.visibility = View.INVISIBLE
-        } else {
-            searchView.visibility = View.GONE
+        fun exitRenameMode() {
+            renameLayoutListener?.let { binding.root.removeOnLayoutChangeListener(it) }
+            renameLayoutListener = null
+            editLayout.clearFocus()
+            searchView.visibility = if (searchEnabled) View.VISIBLE else View.GONE
+            enableAppMenuScroll()
         }
 
-        editText.requestFocus()
-
-        // Open keyboard
-        handler.postDelayed({
-            val imm =
-                getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-            imm.showSoftInput(editText, InputMethodManager.SHOW_IMPLICIT)
-        }, 100)
+        fun commit(change: () -> Unit) {
+            imm.hideSoftInputFromWindow(editText.windowToken, 0)
+            exitRenameMode()
+            change()
+            holder.bindingAdapterPosition.takeIf { it != RecyclerView.NO_POSITION }?.let {
+                appAdapter?.notifyItemChanged(it)
+            }
+        }
 
         renameLayoutListener = View.OnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom ->
-
-            // If the keyboard is closed, exit editing mode
+            // Root grew back: the keyboard was dismissed without confirming.
             if (bottom - top > oldBottom - oldTop) {
-                editLayout.clearFocus()
-
+                exitRenameMode()
                 animations.fadeViewOut(editLayout)
                 animations.fadeViewIn(textView)
-                if (searchEnabled) {
-                    searchView.visibility = View.VISIBLE
-                } else {
-                    searchView.visibility = View.GONE
-                }
-                enableAppMenuScroll()
-
-                // Remove the listener and clear the reference
-                renameLayoutListener?.let { listener ->
-                    binding.root.removeOnLayoutChangeListener(listener)
-                }
-                renameLayoutListener = null
             }
-        }
-
-        renameLayoutListener?.let {
-            binding.root.addOnLayoutChangeListener(it)
-        }
+        }.also { binding.root.addOnLayoutChangeListener(it) }
 
         editText.setOnEditorActionListener { _, actionId, _ ->
-
-            // Once the new name is confirmed, close the keyboard, save the new app name and update the apps on screen
-            if (actionId == EditorInfo.IME_ACTION_DONE) {
-                if (editText.text.isNullOrBlank()) {
-                    Toast.makeText(this@MainActivity, getString(R.string.empty_rename), Toast.LENGTH_SHORT).show()
-                    return@setOnEditorActionListener true
-                }
-                val imm =
-                    getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-                imm.hideSoftInputFromWindow(editText.windowToken, 0)
+            if (actionId != EditorInfo.IME_ACTION_DONE) return@setOnEditorActionListener false
+            if (editText.text.isNullOrBlank()) {
+                Toast.makeText(this@MainActivity, getString(R.string.empty_rename), Toast.LENGTH_SHORT).show()
+            } else {
                 val newName = editText.text.toString()
-                sharedPreferenceManager.setAppName(
-                    appActivity.componentName.flattenToString(),
-                    workProfile,
-                    newName
-                )
-                appSearchIndexDirty = true
-                logger.i("MainActivity", "App renamed from '${appActivity.label}' to '$newName'")
-                lifecycleScope.launch {
-                    applySearch()
-                }
-                enableAppMenuScroll()
-
-                // Remove the layout listener when done
-                renameLayoutListener?.let { listener ->
-                    binding.root.removeOnLayoutChangeListener(listener)
-                }
-                renameLayoutListener = null
-
-                return@setOnEditorActionListener true
+                commit { onSave(newName) }
             }
-            false
+            true
         }
 
-        resetButton.setOnClickListener {
-
-            // If reset is pressed, close keyboard, remove saved edited name and update the apps on screen
-            val imm =
-                getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-            imm.hideSoftInputFromWindow(editText.windowToken, 0)
-            sharedPreferenceManager.resetAppName(
-                appActivity.componentName.flattenToString(),
-                workProfile
-            )
-            appSearchIndexDirty = true
-
-            lifecycleScope.launch {
-                applySearch()
-            }
-        }
+        resetButton.setOnClickListener { onReset?.let { commit(it) } }
     }
 
     private fun findAppPosition(appActivity: LauncherActivityInfo, workProfile: Int): Int {
@@ -2291,8 +2262,11 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
     }
 
     override fun onRenameFolder(folder: AppFolder) {
-        promptFolderName(R.string.rename_folder, folder.name) { name ->
-            saveFolders(folders.map { if (it.id == folder.id) it.copy(name = name) else it })
+        withDrawerRow(appAdapter?.adapterPositionOfFolder(folder.id) ?: -1) { holder ->
+            startRenameMode(holder, onSave = { input ->
+                val name = AppFolder.sanitizeName(input)
+                if (name.isNotEmpty()) saveFolders(folders.map { if (it.id == folder.id) it.copy(name = name) else it })
+            }, onReset = null)
         }
     }
 
@@ -2322,7 +2296,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
     override fun onAddToFolder(appActivity: LauncherActivityInfo, workProfile: Int) {
         val app = appActivity.componentName.flattenToString() to workProfile
         val createFolderWithApp = {
-            promptFolderName(R.string.new_folder, "") { name ->
+            promptNewFolderName { name ->
                 saveFolders(folders + AppFolder(System.currentTimeMillis(), name, listOf(app)))
             }
         }
@@ -2346,11 +2320,9 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
             .show()
     }
 
-    private fun promptFolderName(@StringRes title: Int, initialName: String, onName: (String) -> Unit) {
+    private fun promptNewFolderName(onName: (String) -> Unit) {
         val context = dialogContext()
         val input = EditText(context).apply {
-            setText(initialName)
-            setSelection(initialName.length)
             hint = getString(R.string.folder_name)
             isSingleLine = true
             imeOptions = EditorInfo.IME_ACTION_DONE
@@ -2361,7 +2333,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
             addView(input)
         }
         val dialog = folderDialog()
-            .setTitle(title)
+            .setTitle(R.string.new_folder)
             .setView(container)
             .setPositiveButton(R.string.save, null)
             .setNegativeButton(R.string.confirm_no, null)
