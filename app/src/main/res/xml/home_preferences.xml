@@ -241,6 +241,20 @@
             android:title="@string/notification_dots"
             android:summary="@string/notification_dots_summary"
             app:key="notificationDots" />
+        <SwitchPreference
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:defaultValue="false"
+            android:title="@string/headphones_music_app"
+            android:summary="@string/headphones_music_app_summary"
+            app:key="musicSwipe" />
+        <Preference
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            app:dependency="musicSwipe"
+            app:key="musicSwipeApp"
+            app:selectable="true"
+            app:title="@string/set_music_app" />
     </PreferenceCategory>
     <PreferenceCategory
         android:layout_width="wrap_content"
@@ -276,6 +290,16 @@
             app:key="widgetStackWidgets"
             app:selectable="true"
             app:title="@string/widget_stack_widgets" />
+        <eu.ottop.yamlauncher.settings.SpinnerPreference
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:defaultValue="bottom"
+            android:entries="@array/widget_stack_position_options"
+            android:entryValues="@array/widget_stack_position_values"
+            app:dependency="widgetStackEnabled"
+            app:key="widgetStackPosition"
+            app:title="@string/widget_stack_position"
+            app:useSimpleSummaryProvider="true" />
         <SeekBarPreference
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"

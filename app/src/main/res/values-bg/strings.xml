@@ -71,8 +71,6 @@
     <string name="text_shadow">Сянка на текста</string>
 
     <string name="operation">Действие</string>
-    <string name="block_auto_rotation">Блокиране на автоматично завъртане</string>
-    <string name="block_auto_rotation_summary">Предотвратяване на автоматичното завъртане на екрана</string>
     <string name="animation_speed">Скорост на анимацията</string>
     <string name="swipe_threshold">Праг на плъзгане</string>
     <string name="swipe_velocity_threshold">Праг на скоростта на плъзгане</string>

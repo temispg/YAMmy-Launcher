@@ -1,5 +1,6 @@
 package eu.ottop.yamlauncher.views
 
+import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.appwidget.AppWidgetHost
 import android.appwidget.AppWidgetHostView
@@ -9,6 +10,7 @@ import android.content.ContextWrapper
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.RectF
 import android.os.Build
 import android.os.Bundle
 import android.util.AttributeSet
@@ -19,19 +21,21 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import androidx.core.graphics.ColorUtils
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.PagerSnapHelper
 import androidx.recyclerview.widget.RecyclerView
 import kotlin.math.abs
 
 /**
- * Horizontally paged stack of app widgets for the bottom of the home screen.
+ * Horizontally paged stack of app widgets for the home screen.
  *
  * Built on RecyclerView + PagerSnapHelper: a page swipe is a plain view
  * translation, so it stays inside the frame budget, and only the visible page
  * plus one cached neighbour is attached at a time. Each widget's host view is
  * created once and reused, so swiping never re-inflates RemoteViews.
- * Page dots are drawn into the bottom padding so they never overlap content.
+ * Page dots float over the widget on a pill and are only shown while paging,
+ * fading out shortly after the stack settles, so they take no permanent space.
  *
  * Touch policy:
  * - Taps go straight to the widget. Paging only starts once a horizontal drag
@@ -67,6 +71,19 @@ class WidgetStackView @JvmOverloads constructor(
     private val dotRadius = DOT_RADIUS_DP * density
     private val dotSpacing = DOT_SPACING_DP * density
     private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val pillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val pillRect = RectF()
+    private val pillHalfHeight = dotRadius + PILL_PADDING_DP * density
+    private val indicatorMargin = INDICATOR_MARGIN_DP * density
+
+    private var indicatorAlpha = 0f
+    private val indicatorAnimator = ValueAnimator().apply {
+        addUpdateListener {
+            indicatorAlpha = it.animatedValue as Float
+            invalidate()
+        }
+    }
+    private val hideIndicator = Runnable { fadeIndicator(0f, INDICATOR_FADE_OUT_MS) }
 
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
     private var downX = 0f
@@ -152,15 +169,49 @@ class WidgetStackView @JvmOverloads constructor(
         }
     }
 
+    override fun onScrollStateChanged(state: Int) {
+        super.onScrollStateChanged(state)
+        removeCallbacks(hideIndicator)
+        if (state == SCROLL_STATE_IDLE) {
+            postDelayed(hideIndicator, INDICATOR_HIDE_DELAY_MS)
+        } else {
+            fadeIndicator(1f, INDICATOR_FADE_IN_MS)
+        }
+    }
+
+    private fun fadeIndicator(target: Float, duration: Long) {
+        indicatorAnimator.cancel()
+        indicatorAnimator.setFloatValues(indicatorAlpha, target)
+        indicatorAnimator.duration = duration
+        indicatorAnimator.start()
+    }
+
+    override fun onDetachedFromWindow() {
+        removeCallbacks(hideIndicator)
+        indicatorAnimator.cancel()
+        indicatorAlpha = 0f
+        super.onDetachedFromWindow()
+    }
+
     override fun dispatchDraw(canvas: Canvas) {
         super.dispatchDraw(canvas)
         val count = pages.size
-        if (count < 2) return
-        val cy = height - paddingBottom / 2f
-        var cx = width / 2f - (count - 1) * dotSpacing / 2f
+        if (count < 2 || indicatorAlpha <= 0f) return
+        val firstX = width / 2f - (count - 1) * dotSpacing / 2f
+        val lastX = firstX + (count - 1) * dotSpacing
+        val cy = height - indicatorMargin - pillHalfHeight
+
+        // Contrast against the dots, which follow the launcher text color.
+        val pillColor = if (ColorUtils.calculateLuminance(dotColor) > 0.5) Color.BLACK else Color.WHITE
+        pillPaint.color = ColorUtils.setAlphaComponent(pillColor, (PILL_ALPHA * indicatorAlpha).toInt())
+        pillRect.set(firstX - pillHalfHeight, cy - pillHalfHeight, lastX + pillHalfHeight, cy + pillHalfHeight)
+        canvas.drawRoundRect(pillRect, pillHalfHeight, pillHalfHeight, pillPaint)
+
+        var cx = firstX
         for (i in 0 until count) {
             dotPaint.color = dotColor
-            if (i != currentPage) dotPaint.alpha = dotPaint.alpha * INACTIVE_DOT_ALPHA_PERCENT / 100
+            val alpha = if (i == currentPage) dotPaint.alpha else dotPaint.alpha * INACTIVE_DOT_ALPHA_PERCENT / 100
+            dotPaint.alpha = (alpha * indicatorAlpha).toInt()
             canvas.drawCircle(cx, cy, dotRadius, dotPaint)
             cx += dotSpacing
         }
@@ -282,6 +333,12 @@ class WidgetStackView @JvmOverloads constructor(
         private const val DOT_RADIUS_DP = 3f
         private const val DOT_SPACING_DP = 12f
         private const val INACTIVE_DOT_ALPHA_PERCENT = 40
+        private const val PILL_PADDING_DP = 5f
+        private const val PILL_ALPHA = 200
+        private const val INDICATOR_MARGIN_DP = 12f
+        private const val INDICATOR_FADE_IN_MS = 150L
+        private const val INDICATOR_FADE_OUT_MS = 300L
+        private const val INDICATOR_HIDE_DELAY_MS = 500L
         private const val VERTICAL_BIAS = 1.5f
         private const val MATCH_PARENT = ViewGroup.LayoutParams.MATCH_PARENT
     }

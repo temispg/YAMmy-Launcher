@@ -29,6 +29,8 @@
 
     <string name="removing">Removing…</string>
 
+    <string name="app_paused">Paused</string>
+
     <string name="close_app_menu">Close App Menu</string>
 
     <string name="launch_error">Cannot launch app</string>
@@ -88,8 +90,6 @@
     <string name="text_shadow">Text Shadow</string>
 
     <string name="operation">Operation</string>
-    <string name="block_auto_rotation">Block Auto Rotation</string>
-    <string name="block_auto_rotation_summary">Prevent the screen from rotating automatically</string>
     <string name="animation_speed">Animation Speed</string>
     <string name="swipe_threshold">Swipe Threshold</string>
     <string name="swipe_velocity_threshold">Swipe Velocity Threshold</string>
@@ -163,6 +163,11 @@
     <string
         name="notification_dots_summary"
     >Show a dot on shortcuts when apps have notifications</string>
+    <string name="headphones_music_app">Music App on Headphones</string>
+    <string
+        name="headphones_music_app_summary"
+    >Show a music app above your shortcuts while headphones are connected</string>
+    <string name="set_music_app">Set Music App</string>
     <string name="notification_permission_required">Permission Required</string>
     <string
         name="notification_permission_text"
@@ -183,8 +188,11 @@
     <string name="show_widget_stack">Show Widget Stack</string>
     <string
         name="widget_stack_summary"
-    >Show a swipeable stack of app widgets at the bottom of the home screen</string>
+    >Show a swipeable stack of app widgets on the home screen</string>
     <string name="widget_stack_widgets">Widgets</string>
+    <string name="widget_stack_position">Stack Position</string>
+    <string name="widget_stack_position_bottom">Bottom of screen</string>
+    <string name="widget_stack_position_top">Below clock</string>
     <string name="widget_stack_height">Stack Height (dp)</string>
     <string name="widget_stack_added">Added Widgets</string>
     <string name="widget_stack_available">Available Widgets</string>

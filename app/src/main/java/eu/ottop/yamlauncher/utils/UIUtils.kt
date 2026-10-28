@@ -5,6 +5,7 @@ import android.content.res.Configuration
 import android.graphics.BlendMode
 import android.graphics.BlendModeColorFilter
 import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffColorFilter
 import android.graphics.Rect
@@ -46,6 +47,16 @@ import eu.ottop.yamlauncher.views.WidgetStackView
 class UIUtils(private val context: Context) {
 
     private val sharedPreferenceManager = SharedPreferenceManager(context)
+
+    /** Strike-through isn't announced by TalkBack, so paused rows also get a state description. */
+    fun setPausedStyle(textView: TextView, paused: Boolean) {
+        textView.paintFlags = if (paused) {
+            textView.paintFlags or Paint.STRIKE_THRU_TEXT_FLAG
+        } else {
+            textView.paintFlags and Paint.STRIKE_THRU_TEXT_FLAG.inv()
+        }
+        ViewCompat.setStateDescription(textView, if (paused) context.getString(R.string.app_paused) else null)
+    }
 
     fun resolveTypeface(): Typeface? {
         val font = sharedPreferenceManager.getTextFont()

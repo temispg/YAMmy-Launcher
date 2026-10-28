@@ -32,12 +32,14 @@ import android.content.SharedPreferences
 import android.content.pm.LauncherActivityInfo
 import android.content.pm.LauncherApps
 import android.content.pm.PackageManager
-import android.content.pm.ActivityInfo
 import android.database.Cursor
 import android.graphics.BlendMode
 import android.graphics.BlendModeColorFilter
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffColorFilter
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -108,6 +110,7 @@ import eu.ottop.yamlauncher.utils.PermissionUtils
 import eu.ottop.yamlauncher.utils.StringUtils
 import eu.ottop.yamlauncher.utils.UIUtils
 import eu.ottop.yamlauncher.utils.WeatherSystem
+import eu.ottop.yamlauncher.utils.isPaused
 import eu.ottop.yamlauncher.views.AlphabetIndexView
 import eu.ottop.yamlauncher.views.NowPlayingView
 import eu.ottop.yamlauncher.views.WidgetStackView
@@ -134,6 +137,16 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
             R.id.app1, R.id.app2, R.id.app3, R.id.app4, R.id.app5,
             R.id.app6, R.id.app7, R.id.app8, R.id.app9, R.id.app10,
             R.id.app11, R.id.app12, R.id.app13, R.id.app14, R.id.app15
+        )
+
+        /** Newer types are plain ints, so they simply never match on older devices. */
+        @SuppressLint("InlinedApi")
+        private val HEADPHONE_TYPES = setOf(
+            AudioDeviceInfo.TYPE_WIRED_HEADSET,
+            AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+            AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+            AudioDeviceInfo.TYPE_USB_HEADSET,
+            AudioDeviceInfo.TYPE_BLE_HEADSET,
         )
     }
 
@@ -262,6 +275,62 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
 
     private val handler = Handler(Looper.getMainLooper())
 
+    /** Re-reads pause state the moment an app timer runs out or resets, even while on the home screen. */
+    private val suspensionCallback = object : LauncherApps.Callback() {
+        override fun onPackageRemoved(packageName: String, user: UserHandle) = Unit
+        override fun onPackageAdded(packageName: String, user: UserHandle) = Unit
+        override fun onPackageChanged(packageName: String, user: UserHandle) = Unit
+        override fun onPackagesAvailable(packageNames: Array<out String>, user: UserHandle, replacing: Boolean) = Unit
+        override fun onPackagesUnavailable(packageNames: Array<out String>, user: UserHandle, replacing: Boolean) = Unit
+        override fun onPackagesSuspended(packageNames: Array<out String>, user: UserHandle) = onSuspensionChanged()
+        override fun onPackagesUnsuspended(packageNames: Array<out String>, user: UserHandle) = onSuspensionChanged()
+    }
+
+    private fun onSuspensionChanged() {
+        refreshShortcutLabels()
+        updateMusicShortcut()
+        lifecycleScope.launch { refreshAppMenu() }
+    }
+
+    private var headphonesConnected = false
+
+    /** Registration immediately reports the current devices, so each onStart re-syncs the music row. */
+    private val headphoneCallback = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) = updateHeadphones()
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) = updateHeadphones()
+    }
+
+    private fun updateHeadphones() {
+        val audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
+        headphonesConnected = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { it.type in HEADPHONE_TYPES }
+        updateMusicShortcut()
+    }
+
+    /** Extra row above the shortcuts; never takes a shortcut slot. */
+    private fun updateMusicShortcut() {
+        val view = binding.musicShortcut
+        val (app, profile) = if (headphonesConnected && sharedPreferenceManager.isGestureEnabled("music")) {
+            gestureUtils.getSwipeInfo(launcherApps, "music")
+        } else {
+            null to null
+        }
+        if (app == null || profile == null) {
+            view.visibility = View.GONE
+            return
+        }
+        val user = launcherApps.profiles[profile]
+        view.text = sharedPreferenceManager.getAppName(
+            app.componentName.flattenToString(),
+            profile,
+            AppNameResolver.resolveBaseLabel(this, app)
+        )
+        uiUtils.setPausedStyle(view, app.isPaused())
+        view.setOnClickListener {
+            if (canLaunchShortcut) appUtils.launchApp(app.componentName, user)
+        }
+        view.visibility = View.VISIBLE
+    }
+
     /** Lets home-screen widgets mirror touches into the home gesture detector (swipe up, long press, double tap). */
     private val homeGestureForwarder: (MotionEvent) -> Unit = { event ->
         if (!isDrawerOpen && !animations.isInAnim) gestureDetector.onTouchEvent(event)
@@ -277,14 +346,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         biometricUtils = BiometricUtils(this)
         setSupportActionBar(null)
 
-        // Apply the background and orientation before `setContentView` so the very
-        // first frame already matches the user's configuration. Setting them
-        // after inflation caused a visible flash and a relayout once the
-        // decoration was repainted.
-        val earlyPrefs = SharedPreferenceManager(this)
-        if (earlyPrefs.isAutoRotationBlocked()) {
-            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED
-        }
+        // Apply the background before inflation so the first frame matches the user's preferences.
         UIUtils(this).setBackground(window, applyHomescreenDarkening = true)
 
         binding = ActivityMainBinding.inflate(layoutInflater)
@@ -295,6 +357,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         uiUtils.adjustInsets(binding.root)
 
         setShortcuts()
+        launcherApps.registerCallback(suspensionCallback, handler)
 
         setPreferences()
 
@@ -395,8 +458,14 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
      * Configures the home screen shortcuts based on user preferences.
      * Shows/hides shortcuts based on configured count and sets up click/long-click listeners.
      */
+    @SuppressLint("ClickableViewAccessibility")
     private fun setShortcuts() {
         val shortcutNo = sharedPreferenceManager.getShortcutNumber()
+
+        binding.musicShortcut.setOnTouchListener { _, event ->
+            shortcutGestureDetector.onTouchEvent(event)
+            super.onTouchEvent(event)
+        }
 
         SHORTCUT_IDS.forEachIndexed { index, shortcutId ->
             val textView = findViewById<TextView>(shortcutId)
@@ -502,14 +571,22 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
                     unsetShortcutSetup(textView)
                     return@setOnEditorActionListener true
                 }
-                textView.text = menuTitle.text
-                sharedPreferenceManager.setShortcut(
-                    index,
-                    textView.text,
-                    savedView.componentName,
-                    savedView.profile,
-                    savedView.isContact
-                )
+                val newName = menuTitle.text.toString()
+                val folderId = AppFolder.idFromComponentKey(savedView.componentName)
+                val activity = if (savedView.isContact || folderId != null) null else shortcutActivity(savedView)
+                when {
+                    folderId != null -> AppFolder.sanitizeName(newName).takeIf { it.isNotEmpty() }?.let { name ->
+                        saveFolders(folders.map { if (it.id == folderId) it.copy(name = name) else it })
+                    }
+                    activity != null -> {
+                        sharedPreferenceManager.setAppName(activity.componentName.flattenToString(), savedView.profile, newName)
+                        appSearchIndexDirty = true
+                        // Drawer rows skip rebinding on name-only changes, so force it.
+                        appAdapter?.notifyDataSetChanged()
+                    }
+                }
+                sharedPreferenceManager.setShortcut(index, newName, savedView.componentName, savedView.profile, savedView.isContact)
+                refreshShortcutLabels()
                 backToHome()
                 return@setOnEditorActionListener true
             }
@@ -550,6 +627,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
 
     private fun unsetShortcutSetup(textView: TextView) {
         textView.text = getString(R.string.shortcut_default)
+        uiUtils.setPausedStyle(textView, false)
         unsetShortcutListeners(textView)
     }
 
@@ -561,8 +639,52 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         }
     }
 
+    /**
+     * Apps and folders show their drawer name so both places always agree. The label stored with
+     * the shortcut is only used for contacts and for targets that no longer exist.
+     */
+    private fun shortcutLabel(setting: ShortcutSetting, activity: LauncherActivityInfo?): String {
+        if (setting.isContact) return setting.label
+        AppFolder.idFromComponentKey(setting.componentName)?.let { id ->
+            return folders.firstOrNull { it.id == id }?.name ?: setting.label
+        }
+        if (activity == null) return setting.label
+        return sharedPreferenceManager.getAppName(
+            activity.componentName.flattenToString(),
+            setting.profile,
+            AppNameResolver.resolveBaseLabel(this, activity)
+        )?.toString() ?: setting.label
+    }
+
+    /** Accepts both full component names and the bare package names older versions stored. */
+    private fun shortcutActivity(setting: ShortcutSetting): LauncherActivityInfo? {
+        val user = launcherApps.profiles.getOrNull(setting.profile) ?: return null
+        val component = ComponentName.unflattenFromString(setting.componentName)
+        val activities = try {
+            launcherApps.getActivityList(component?.packageName ?: setting.componentName, user)
+        } catch (_: Exception) {
+            return null
+        }
+        return if (component == null) activities.firstOrNull() else activities.firstOrNull { it.componentName == component }
+    }
+
+    /** Sets the label and paused style from one activity lookup. */
+    private fun bindShortcutLabel(textView: TextView, setting: ShortcutSetting) {
+        val isApp = !setting.isContact && AppFolder.idFromComponentKey(setting.componentName) == null
+        val activity = if (isApp) shortcutActivity(setting) else null
+        textView.text = shortcutLabel(setting, activity).ifBlank { getString(R.string.shortcut_default) }
+        uiUtils.setPausedStyle(textView, activity?.isPaused() == true)
+    }
+
+    private fun refreshShortcutLabels() {
+        SHORTCUT_IDS.forEachIndexed { index, id ->
+            val setting = sharedPreferenceManager.getShortcutSetting(index) ?: return@forEachIndexed
+            bindShortcutLabel(findViewById(id), setting)
+        }
+    }
+
     private fun setShortcutSetup(textView: TextView, savedView: ShortcutSetting) {
-        textView.text = savedView.label.ifBlank { getString(R.string.shortcut_default) }
+        bindShortcutLabel(textView, savedView)
 
         if (savedView.isContact) {
             setShortcutContactListeners(textView, savedView.profile)
@@ -664,7 +786,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
     }
 
     private fun setPreferences() {
-        // Orientation and window background are set in onCreate before
+        // Window background is set in onCreate before
         // setContentView so the first frame already reflects the user's prefs.
         val typeface = uiUtils.resolveTypeface()
         uiUtils.setTextFont(binding.homeView, typeface)
@@ -990,14 +1112,6 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
             "searchEnabled" -> uiUtils.setSearchVisibility(searchView, binding.searchLayout, binding.searchReplacement)
             "barVisibility" -> uiUtils.setStatusBar(window)
 
-            "blockAutoRotation" -> {
-                requestedOrientation = if (sharedPreferenceManager.isAutoRotationBlocked()) {
-                    ActivityInfo.SCREEN_ORIENTATION_LOCKED
-                } else {
-                    ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-                }
-            }
-
             "clockAlignment" -> uiUtils.setClockAlignment(clock, dateText)
             "shortcutAlignment" -> uiUtils.setShortcutsAlignment(binding.homeView)
             "shortcutVAlignment" -> uiUtils.setShortcutsVAlignment(binding.topSpace, binding.bottomSpace)
@@ -1015,6 +1129,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
             "leftSwipe", "leftSwipeApp" -> leftSwipeActivity = gestureUtils.getSwipeInfo(launcherApps, "left")
             "rightSwipe", "rightSwipeApp" -> rightSwipeActivity = gestureUtils.getSwipeInfo(launcherApps, "right")
             "doubleTapAction", "doubleTapSwipeApp" -> doubleTapApp = gestureUtils.getSwipeInfo(launcherApps, "doubleTap")
+            "musicSwipe", "musicSwipeApp" -> updateMusicShortcut()
 
             "batteryEnabled" -> {
                 if (sharedPreferenceManager.isBatteryEnabled()) {
@@ -1084,6 +1199,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
             }
 
             "widgetStackEnabled", "widgetStackIds", "widgetStackHeight" -> updateWidgetStack()
+            "widgetStackPosition" -> widgetStackView?.let { placeWidgetStack(it) }
         }
     }
 
@@ -1116,7 +1232,19 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         widgetStackView = view
         view.dotColor = sharedPreferenceManager.getTextColor()
         view.homeGestureForwarder = homeGestureForwarder
+        placeWidgetStack(view)
         return view
+    }
+
+    /** Top places the stack between the clock and the media widget; bottom keeps it last in the column. */
+    private fun placeWidgetStack(view: WidgetStackView) {
+        val parent = binding.clockLayout.parent as ViewGroup
+        parent.removeView(view)
+        if (sharedPreferenceManager.isWidgetStackOnTop()) {
+            parent.addView(view, parent.indexOfChild(binding.clockLayout) + 1)
+        } else {
+            parent.addView(view)
+        }
     }
 
     private fun startWidgetHost() {
@@ -1289,7 +1417,8 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         if (list1.size != list2.size) return false
 
         for (i in list1.indices) {
-            if (list1[i].first.componentName != list2[i].first.componentName || list1[i].second != list2[i].second) {
+            if (list1[i].first.componentName != list2[i].first.componentName || list1[i].second != list2[i].second ||
+                list1[i].first.isPaused() != list2[i].first.isPaused()) {
                 return false
             }
         }
@@ -1823,6 +1952,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         super.onDestroy()
 
         try {
+            launcherApps.unregisterCallback(suspensionCallback)
             unregisterBatteryReceiver()
             unregisterNotificationReceiver()
             nowPlayingManager?.stop()
@@ -1905,6 +2035,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         closeKeyboard()
         startNowPlaying()
         if (sharedPreferenceManager.isWidgetStackEnabled()) startWidgetHost()
+        (getSystemService(AUDIO_SERVICE) as AudioManager).registerAudioDeviceCallback(headphoneCallback, handler)
     }
 
     override fun onStop() {
@@ -1913,6 +2044,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         nowPlayingManager?.stop()
         // Same for widget updates: providers stop pushing RemoteViews to a stopped host.
         stopWidgetHost()
+        (getSystemService(AUDIO_SERVICE) as AudioManager).unregisterAudioDeviceCallback(headphoneCallback)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -2005,6 +2137,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         }
 
         shortcutView.text = textView.text.toString()
+        uiUtils.setPausedStyle(shortcutView, appInfo.isPaused())
         shortcutView.setOnClickListener {
             appUtils.launchApp(appInfo.componentName, userHandle)
         }
@@ -2091,11 +2224,13 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
                     logger.i("MainActivity", "App renamed from '${appActivity.label}' to '$newName'")
                     appSearchIndexDirty = true
                     lifecycleScope.launch { applySearch() }
+                    refreshShortcutLabels()
                 },
                 onReset = {
                     sharedPreferenceManager.resetAppName(componentName, workProfile)
                     appSearchIndexDirty = true
                     lifecycleScope.launch { applySearch() }
+                    refreshShortcutLabels()
                 }
             )
         }
@@ -2266,6 +2401,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
             startRenameMode(holder, onSave = { input ->
                 val name = AppFolder.sanitizeName(input)
                 if (name.isNotEmpty()) saveFolders(folders.map { if (it.id == folder.id) it.copy(name = name) else it })
+                refreshShortcutLabels()
             }, onReset = null)
         }
     }
@@ -2533,6 +2669,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
 
     override fun onContactShortcut(contactId: Int, contactName: String, shortcutView: TextView, shortcutIndex: Int) {
         shortcutView.text = contactName
+        uiUtils.setPausedStyle(shortcutView, false)
         shortcutView.setOnClickListener {
             onContactClick(contactId)
         }

@@ -4,6 +4,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.view.ContextThemeWrapper
 import android.content.pm.LauncherActivityInfo
 import android.content.pm.LauncherApps
@@ -16,6 +17,12 @@ import eu.ottop.yamlauncher.R
 import eu.ottop.yamlauncher.settings.SharedPreferenceManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+
+/**
+ * Suspended by the system, e.g. Digital Wellbeing once an app timer runs out, or Focus/Bedtime mode.
+ * Only fresh as of the `getActivityList` call that produced this info.
+ */
+fun LauncherActivityInfo.isPaused() = applicationInfo.flags and ApplicationInfo.FLAG_SUSPENDED != 0
 
 /**
  * Utility class for app management operations.

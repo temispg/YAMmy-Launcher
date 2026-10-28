@@ -37,6 +37,7 @@ class HomeSettingsFragment : PreferenceFragmentCompat(), TitleProvider {
     private var nowPlayingPref: SwitchPreference? = null
     private var screenTimePref: SwitchPreference? = null
     private var weatherAppPref: Preference? = null
+    private var musicAppPref: Preference? = null
     private var widgetStackWidgetsPref: Preference? = null
 
     private val curboxPermissionLauncher =
@@ -65,11 +66,18 @@ class HomeSettingsFragment : PreferenceFragmentCompat(), TitleProvider {
         nowPlayingPref = findPreference("nowPlayingEnabled")
         screenTimePref = findPreference("screenTimeEnabled")
         weatherAppPref = findPreference("weatherSwipeApp")
+        musicAppPref = findPreference("musicSwipeApp")
         widgetStackWidgetsPref = findPreference("widgetStackWidgets")
 
         weatherAppPref?.onPreferenceClickListener =
             Preference.OnPreferenceClickListener {
                 uiUtils.switchFragment(requireActivity(), GestureAppsFragment.newInstance("weather"))
+                true
+            }
+
+        musicAppPref?.onPreferenceClickListener =
+            Preference.OnPreferenceClickListener {
+                uiUtils.switchFragment(requireActivity(), GestureAppsFragment.newInstance("music"))
                 true
             }
 
@@ -200,6 +208,7 @@ class HomeSettingsFragment : PreferenceFragmentCompat(), TitleProvider {
         rightSwipePref?.summary = sharedPreferenceManager.getGestureName("right")
         doubleTapAppPref?.summary = sharedPreferenceManager.getGestureName("doubleTap")
         weatherAppPref?.summary = sharedPreferenceManager.getGestureName("weather")
+        musicAppPref?.summary = sharedPreferenceManager.getGestureName("music")
         val widgetCount = sharedPreferenceManager.getWidgetStackIds().size
         widgetStackWidgetsPref?.summary = resources.getQuantityString(R.plurals.widget_stack_count, widgetCount, widgetCount)
 

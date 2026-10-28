@@ -73,8 +73,6 @@
     <string name="text_shadow">Cień tekstu</string>
 
     <string name="operation">Działanie</string>
-    <string name="block_auto_rotation">Zablokuj autoobracanie ekranu</string>
-    <string name="block_auto_rotation_summary">Zapobiega automatycznemu obracaniu ekranu</string>
     <string name="animation_speed">Szybkość animacji</string>
     <string name="swipe_threshold">Czułość przesunięcia</string>
     <string name="swipe_velocity_threshold">Czułość prędkości przesunięcia</string>

@@ -101,4 +101,9 @@
         <item>@string/alphabet_index_left</item>
         <item>@string/alphabet_index_right</item>
     </string-array>
+
+    <string-array name="widget_stack_position_options">
+        <item>@string/widget_stack_position_bottom</item>
+        <item>@string/widget_stack_position_top</item>
+    </string-array>
 </resources>

@@ -129,6 +129,7 @@ internal object PreferenceSchema {
         "appSpacing" to "20",
         "alphabetIndexPosition" to "right",
         "widgetStackIds" to "",
+        "widgetStackPosition" to "bottom",
     )
 
     val booleanDefaults = mapOf(
@@ -136,7 +137,7 @@ internal object PreferenceSchema {
         "appDrawerDarkening" to true,
         "settingsDarkening" to true,
         "homescreenDarkening" to false, "enableConfirmation" to false,
-        "blockAutoRotation" to false, "lockSettings" to false,
+        "lockSettings" to false,
         "clockEnabled" to true, "dateEnabled" to true,
         "lockShortcuts" to false, "notificationDots" to false,
         "nowPlayingEnabled" to false, "widgetStackEnabled" to false,
@@ -144,7 +145,7 @@ internal object PreferenceSchema {
         "weatherEnabled" to false, "gpsLocation" to false,
         "clockClick" to true, "dateClick" to true,
         "clockSwipe" to false, "dateSwipe" to false,
-        "leftSwipe" to false, "rightSwipe" to false,
+        "leftSwipe" to false, "rightSwipe" to false, "musicSwipe" to false,
         "doubleTap" to false, "pinEnabled" to true, "infoEnabled" to true,
         "uninstallEnabled" to true, "renameEnabled" to true,
         "hideEnabled" to true, "closeEnabled" to true,

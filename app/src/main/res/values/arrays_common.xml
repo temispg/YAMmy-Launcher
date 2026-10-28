@@ -146,4 +146,9 @@
         <item>left</item>
         <item>right</item>
     </string-array>
+
+    <string-array name="widget_stack_position_values" translatable="false">
+        <item>bottom</item>
+        <item>top</item>
+    </string-array>
 </resources>

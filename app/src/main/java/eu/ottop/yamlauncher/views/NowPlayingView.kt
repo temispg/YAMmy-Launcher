@@ -97,7 +97,8 @@ class NowPlayingView @JvmOverloads constructor(
 
     fun bind(info: NowPlayingInfo) {
         if (isAnimatingOut) return
-        titleView.text = info.title
+        // setText restarts the marquee even for identical text, and play/pause rebinds the same track.
+        if (!titleView.text.contentEquals(info.title)) titleView.text = info.title
         artistView.text = info.artist
         artistView.visibility = if (info.artist.isNullOrBlank()) GONE else VISIBLE
 

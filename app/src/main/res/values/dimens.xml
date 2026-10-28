@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <dimen name="now_playing_art_size">56dp</dimen>    <dimen name="now_playing_control_size">44dp</dimen>
-    <dimen name="widget_stack_indicator_height">16dp</dimen>
     <dimen name="widget_preview_width">112dp</dimen>
     <dimen name="widget_preview_height">72dp</dimen>
 </resources>

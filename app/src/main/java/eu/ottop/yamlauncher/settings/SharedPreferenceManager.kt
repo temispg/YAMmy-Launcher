@@ -142,11 +142,6 @@ class SharedPreferenceManager(private val context: Context) {
     fun isConfirmationEnabled(): Boolean = store.boolean("enableConfirmation", false)
 
     /**
-     * Checks if auto rotation is blocked.
-     */
-    fun isAutoRotationBlocked(): Boolean = store.boolean("blockAutoRotation", false)
-
-    /**
      * Checks if settings require biometric authentication.
      */
     fun isSettingsLocked(): Boolean = store.boolean("lockSettings", false)
@@ -273,8 +268,11 @@ class SharedPreferenceManager(private val context: Context) {
     // Widget Stack Preferences
     // ============================================
 
-    /** Checks if the bottom widget stack is enabled. */
+    /** Checks if the widget stack is enabled. */
     fun isWidgetStackEnabled(): Boolean = store.boolean("widgetStackEnabled", false)
+
+    /** True when the stack sits directly below the clock instead of at the bottom of the screen. */
+    fun isWidgetStackOnTop(): Boolean = store.string("widgetStackPosition", "bottom") == "top"
 
     /** Gets the widget stack height in dp. */
     fun getWidgetStackHeightDp(): Int = store.intFromString("widgetStackHeight", 160, 80..500)
@@ -688,6 +686,6 @@ class SharedPreferenceManager(private val context: Context) {
     }
 
     private companion object {
-        val GESTURE_DIRECTIONS = setOf("clock", "date", "left", "right", "doubleTap", "weather")
+        val GESTURE_DIRECTIONS = setOf("clock", "date", "left", "right", "doubleTap", "weather", "music")
     }
 }

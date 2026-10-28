@@ -29,6 +29,7 @@ import eu.ottop.yamlauncher.utils.AppNameResolver
 import eu.ottop.yamlauncher.utils.AppUtils
 import eu.ottop.yamlauncher.utils.Logger
 import eu.ottop.yamlauncher.utils.UIUtils
+import eu.ottop.yamlauncher.utils.isPaused
 
 /**
  * RecyclerView adapter for displaying installed apps in the app menu.
@@ -75,7 +76,8 @@ private class DrawerRowDiffCallback(
             is DrawerRow.Header -> true
             // Rows render the cached AppNameResolver label; LauncherActivityInfo.label loads the
             // other app's resources, which on the main thread stalls the drawer close animation.
-            is DrawerRow.App -> new is DrawerRow.App && old.pinned == new.pinned
+            is DrawerRow.App -> new is DrawerRow.App && old.pinned == new.pinned &&
+                old.entry.first.isPaused() == new.entry.first.isPaused()
             is DrawerRow.Folder -> new is DrawerRow.Folder && old.folder.name == new.folder.name
         }
     }
@@ -323,6 +325,7 @@ class AppMenuAdapter(
         holder.editView.visibility = View.INVISIBLE
         holder.textView.setCompoundDrawablesWithIntrinsicBounds(drawableFolder, null, drawableEmpty, null)
         styleRow(holder)
+        uiUtils.setPausedStyle(holder.textView, false)
         holder.textView.text = folder.name
         holder.editText.setText(folder.name)
         holder.textView.visibility = View.VISIBLE
@@ -363,6 +366,7 @@ class AppMenuAdapter(
         holder.textView.setCompoundDrawablesWithIntrinsicBounds(leftDrawable, null, drawableEmpty, null)
 
         styleRow(holder)
+        uiUtils.setPausedStyle(holder.textView, app.first.isPaused())
 
         // Set app name or removal placeholder
         if (appUtils.isAppInstalled(app.first.applicationInfo.packageName, app.third)) {

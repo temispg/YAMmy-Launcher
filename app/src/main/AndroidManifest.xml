@@ -39,6 +39,7 @@
         <activity
             android:name=".settings.SettingsActivity"
             android:exported="false"
+            android:screenOrientation="portrait"
             android:theme="@style/SettingsTheme"
             android:windowSoftInputMode="adjustResize" />
         <activity
@@ -46,6 +47,7 @@
             android:excludeFromRecents="true"
             android:exported="true"
             android:launchMode="singleTask"
+            android:screenOrientation="portrait"
             android:theme="@style/Theme.YamLauncher"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>

@@ -263,6 +263,23 @@
             android:layout_height="0dp"
             android:layout_weight="0.22" />
 
+        <!-- Shown above the shortcuts only while headphones are connected. -->
+        <TextView
+            android:id="@+id/musicShortcut"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="0.09"
+            android:autoSizeTextType="uniform"
+            android:drawableLeft="@drawable/music_note_15px"
+            android:drawablePadding="3dp"
+            android:gravity="center_vertical"
+            android:paddingHorizontal="20dp"
+            android:shadowColor="#00FFFFFF"
+            android:shadowRadius="10"
+            android:textAppearance="@android:style/TextAppearance.DeviceDefault"
+            android:textColor="#F3F3F3"
+            android:visibility="gone" />
+
         <TextView
             android:id="@+id/app1"
             android:layout_width="match_parent"
