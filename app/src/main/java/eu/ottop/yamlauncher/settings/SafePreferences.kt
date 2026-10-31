@@ -7,32 +7,52 @@ import androidx.core.content.edit
  * Small defensive boundary around SharedPreferences.
  *
  * Android's typed getters throw ClassCastException when a backup or an older
- * version stored a key with another type. Reading from [SharedPreferences.all]
- * lets us recover such values and rewrite them in the format used by the
+ * version stored a key with another type. Reads try the expected type first and
+ * only then fall back to [SharedPreferences.all], which copies every entry, so
+ * such values are recovered and can be rewritten in the format used by the
  * current preference XML.
  */
 internal class SafePreferences(private val preferences: SharedPreferences) {
     fun string(key: String, default: String): String {
-        return PreferenceValues.asString(preferences.all[key], default)
+        return read(key, default, { preferences.getString(key, null) ?: default }) {
+            PreferenceValues.asString(it, default)
+        }
     }
 
     fun boolean(key: String, default: Boolean): Boolean {
-        return PreferenceValues.asBoolean(preferences.all[key], default)
+        return read(key, default, { preferences.getBoolean(key, default) }) {
+            PreferenceValues.asBoolean(it, default)
+        }
     }
 
     fun intFromString(key: String, default: Int, range: IntRange? = null): Int {
-        val value = PreferenceValues.asInt(preferences.all[key], default)
+        val value = read(key, default, { PreferenceValues.asInt(preferences.getString(key, null), default) }) {
+            PreferenceValues.asInt(it, default)
+        }
         return if (range == null) value else value.coerceIn(range)
     }
 
     fun longFromString(key: String, default: Long, range: LongRange? = null): Long {
-        val value = PreferenceValues.asLong(preferences.all[key], default)
+        val value = read(key, default, { PreferenceValues.asLong(preferences.getString(key, null), default) }) {
+            PreferenceValues.asLong(it, default)
+        }
         return if (range == null) value else value.coerceIn(range)
     }
 
     fun floatFromString(key: String, default: Float, range: ClosedFloatingPointRange<Float>? = null): Float {
-        val value = PreferenceValues.asFloat(preferences.all[key], default)
+        val value = read(key, default, { PreferenceValues.asFloat(preferences.getString(key, null), default) }) {
+            PreferenceValues.asFloat(it, default)
+        }
         return if (range == null) value else value.coerceIn(range)
+    }
+
+    private inline fun <T> read(key: String, default: T, typed: () -> T, convert: (Any?) -> T): T {
+        if (!preferences.contains(key)) return default
+        return try {
+            typed()
+        } catch (_: ClassCastException) {
+            convert(preferences.all[key])
+        }
     }
 
     fun putString(key: String, value: String?) = preferences.edit { putString(key, value) }

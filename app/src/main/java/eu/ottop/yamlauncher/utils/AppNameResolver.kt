@@ -81,4 +81,9 @@ object AppNameResolver {
             }
         }
     }
+
+    /** Drops cached labels of [packageName]'s activities so an update that renamed the app is picked up. */
+    fun invalidatePackage(packageName: String) {
+        baseLabelCache.keys.removeAll { it.substringBefore('/') == packageName }
+    }
 }

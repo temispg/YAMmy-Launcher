@@ -109,6 +109,8 @@ import eu.ottop.yamlauncher.utils.Logger
 import eu.ottop.yamlauncher.utils.PermissionUtils
 import eu.ottop.yamlauncher.utils.StringUtils
 import eu.ottop.yamlauncher.utils.UIUtils
+import eu.ottop.yamlauncher.utils.WeatherCache
+import eu.ottop.yamlauncher.utils.WeatherSchedule
 import eu.ottop.yamlauncher.utils.WeatherSystem
 import eu.ottop.yamlauncher.utils.isPaused
 import eu.ottop.yamlauncher.views.AlphabetIndexView
@@ -117,8 +119,11 @@ import eu.ottop.yamlauncher.views.WidgetStackView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.channels.Channel
 import java.lang.reflect.Method
 import kotlin.math.abs
 
@@ -148,10 +153,19 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
             AudioDeviceInfo.TYPE_USB_HEADSET,
             AudioDeviceInfo.TYPE_BLE_HEADSET,
         )
+
+        private const val PACKAGE_REFRESH_DEBOUNCE_MS = 300L
     }
 
     /** Handles weather data fetching and temperature display */
     private lateinit var weatherSystem: WeatherSystem
+    /** Last successful weather reading, persisted across restarts */
+    private lateinit var weatherCache: WeatherCache
+    /** Wakes the weather loop when weather settings change */
+    private val weatherSettingsChanged = Channel<Unit>(Channel.CONFLATED)
+    /** Consecutive failed weather fetches, used for retry backoff */
+    private var weatherFailures = 0
+    private var lastWeatherFailureMs: Long? = null
     /** Reads today's screen time from Curbox's local API. */
     private lateinit var curboxApiClient: CurboxApiClient
     /** Utilities for launching apps and managing installed applications */
@@ -275,13 +289,18 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
 
     private val handler = Handler(Looper.getMainLooper())
 
-    /** Re-reads pause state the moment an app timer runs out or resets, even while on the home screen. */
-    private val suspensionCallback = object : LauncherApps.Callback() {
-        override fun onPackageRemoved(packageName: String, user: UserHandle) = Unit
-        override fun onPackageAdded(packageName: String, user: UserHandle) = Unit
-        override fun onPackageChanged(packageName: String, user: UserHandle) = Unit
-        override fun onPackagesAvailable(packageNames: Array<out String>, user: UserHandle, replacing: Boolean) = Unit
-        override fun onPackagesUnavailable(packageNames: Array<out String>, user: UserHandle, replacing: Boolean) = Unit
+    /**
+     * Keeps the drawer and shortcuts in sync with installs, updates and removals, and re-reads
+     * pause state the moment an app timer runs out or resets, even while on the home screen.
+     */
+    private val packageCallback = object : LauncherApps.Callback() {
+        override fun onPackageRemoved(packageName: String, user: UserHandle) = onPackagesChanged(packageName)
+        override fun onPackageAdded(packageName: String, user: UserHandle) = onPackagesChanged(packageName)
+        override fun onPackageChanged(packageName: String, user: UserHandle) = onPackagesChanged(packageName)
+        override fun onPackagesAvailable(packageNames: Array<out String>, user: UserHandle, replacing: Boolean) =
+            onPackagesChanged(*packageNames)
+        override fun onPackagesUnavailable(packageNames: Array<out String>, user: UserHandle, replacing: Boolean) =
+            onPackagesChanged(*packageNames)
         override fun onPackagesSuspended(packageNames: Array<out String>, user: UserHandle) = onSuspensionChanged()
         override fun onPackagesUnsuspended(packageNames: Array<out String>, user: UserHandle) = onSuspensionChanged()
     }
@@ -290,6 +309,28 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         refreshShortcutLabels()
         updateMusicShortcut()
         lifecycleScope.launch { refreshAppMenu() }
+    }
+
+    /** Packages added, updated or removed since the drawer last re-read them. Guarded by itself. */
+    private val pendingPackageChanges = HashSet<String>()
+    /** Debounces package events: one install or update arrives as a burst of removed, added and changed. */
+    private var packageRefreshJob: Job? = null
+    /** Set when [refreshAppMenu] was skipped during a search, so it runs once the search ends. */
+    private var isAppMenuStale = false
+
+    /** While stopped the change is only recorded; [onResume] refreshes anyway. */
+    private fun onPackagesChanged(vararg packageNames: String) {
+        synchronized(pendingPackageChanges) { pendingPackageChanges.addAll(packageNames) }
+        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return
+        packageRefreshJob?.cancel()
+        packageRefreshJob = lifecycleScope.launch {
+            delay(PACKAGE_REFRESH_DEBOUNCE_MS)
+            refreshAppMenu()
+        }
+    }
+
+    private fun takePendingPackageChanges(): Set<String> = synchronized(pendingPackageChanges) {
+        pendingPackageChanges.toSet().also { pendingPackageChanges.clear() }
     }
 
     private var headphonesConnected = false
@@ -339,7 +380,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
     /**
      * Called when the activity is first created.
      * Initializes view binding, utilities, preferences, listeners, and starts background tasks.
-     * Sets up periodic app menu refresh and weather updates via coroutines.
+     * Sets up periodic weather updates via coroutines.
      */
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -357,7 +398,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         uiUtils.adjustInsets(binding.root)
 
         setShortcuts()
-        launcherApps.registerCallback(suspensionCallback, handler)
+        launcherApps.registerCallback(packageCallback, handler)
 
         setPreferences()
 
@@ -365,26 +406,10 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
 
         updateWidgetStack()
 
-        // Task to update the app menu every 5 seconds to detect newly installed/removed apps.
-        // The first launch already populates `installedApps` via `setupApps()`; the initial
-        // tick would only re-do that work and trigger an early alphabet-index shift, so we
-        // skip it to avoid a post-launch layout shift.
-        lifecycleScope.launch {
-            lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-                while (true) {
-                    delay(5000)
-                    refreshAppMenu()
-                }
-            }
-        }
-
         // Task to update the weather periodically based on configured interval
-        lifecycleScope.launch(Dispatchers.IO) {
+        lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                while (true) {
-                    updateWeather()
-                    delay(sharedPreferenceManager.getWeatherUpdateIntervalMs())
-                }
+                runWeatherUpdates()
             }
         }
 
@@ -418,6 +443,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         logger.i("MainActivity", "MainActivity started")
 
         weatherSystem = WeatherSystem(this@MainActivity)
+        weatherCache = WeatherCache(this@MainActivity)
         curboxApiClient = CurboxApiClient(this@MainActivity) {
             lifecycleScope.launch { updateScreenTime() }
         }
@@ -1140,6 +1166,10 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
                 }
             }
 
+            "weatherEnabled", "gpsLocation", "tempUnits", "weatherUpdateInterval" -> rescheduleWeather()
+            // In GPS mode the location is written by the weather fetch itself, so it is not a new input.
+            "location" -> if (!sharedPreferenceManager.isWeatherGPS()) rescheduleWeather()
+
             "shortcutNo", "lockShortcuts" -> setShortcuts()
             "swipeThreshold" -> swipeThreshold = sharedPreferenceManager.getSwipeThreshold()
             "swipeVelocity" -> swipeVelocityThreshold = sharedPreferenceManager.getSwipeVelocity()
@@ -1387,13 +1417,28 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         imm.hideSoftInputFromWindow(binding.root.windowToken, 0)
     }
 
+    /**
+     * Re-reads installed apps and applies any changes to the drawer. After package events it also
+     * adopts the fresh app info and rebinds rows and shortcuts, since an update can rename an app
+     * without changing the list.
+     */
+    @SuppressLint("NotifyDataSetChanged")
     suspend fun refreshAppMenu() {
         try {
             // Don't reset app menu while under a search
-            if (!isSearchActive && ::installedApps.isInitialized) {
+            if (isSearchActive) {
+                isAppMenuStale = true
+                return
+            }
+            if (::installedApps.isInitialized) {
+                isAppMenuStale = false
+                val changedPackages = takePendingPackageChanges()
+                // Before reading the apps, so sorting caches the updated labels.
+                changedPackages.forEach(AppNameResolver::invalidatePackage)
                 val updatedApps = appUtils.getInstalledApps(showHidden)
+                val packagesChanged = changedPackages.isNotEmpty()
                 // Use structural equality check and atomic update pattern
-                if (installedApps.isEmpty() || !listsEqual(installedApps, updatedApps)) {
+                if (packagesChanged || installedApps.isEmpty() || !listsEqual(installedApps, updatedApps)) {
                     updateMenu(updatedApps)
                     // Atomic update - assign once
                     installedApps = updatedApps
@@ -1402,6 +1447,13 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
 
                     if (::alphabetIndex.isInitialized && sharedPreferenceManager.isAlphabetIndexEnabled()) {
                         refreshAlphabetIndex(currentFilteredApps)
+                    }
+                }
+                if (packagesChanged) {
+                    withContext(Dispatchers.Main) {
+                        refreshShortcutLabels()
+                        // Drawer rows skip rebinding on name-only changes.
+                        appAdapter?.notifyDataSetChanged()
                     }
                 }
             }
@@ -1436,27 +1488,75 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         }
     }
 
-    private suspend fun updateWeather() {
-        withContext(Dispatchers.IO) {
-            if (sharedPreferenceManager.isWeatherEnabled()) {
-                if (sharedPreferenceManager.isWeatherGPS()) {
-                    weatherSystem.setGpsLocation(this@MainActivity)
-                } else {
-                    updateWeatherText()
-                }
-            } else {
-                withContext(Dispatchers.Main) {
-                    modifyDate("", 2)
-                }
+    /**
+     * Keeps the weather reading current while home is visible.
+     * Shows the cached reading right away and only fetches once the update interval has
+     * elapsed since the last successful fetch, so returning home does not trigger a request.
+     * Suspends until cancelled; settings changes wake it via [rescheduleWeather].
+     */
+    private suspend fun runWeatherUpdates() {
+        weatherSettingsChanged.tryReceive()
+        while (true) {
+            val isGps = sharedPreferenceManager.isWeatherGPS()
+            val location = sharedPreferenceManager.getWeatherLocation()
+            if (!sharedPreferenceManager.isWeatherEnabled() || (!isGps && location.isEmpty())) {
+                modifyDate("", 2)
+                weatherSettingsChanged.receive()
+                continue
             }
+
+            val cacheKey = WeatherCache.keyFor(isGps, location, sharedPreferenceManager.getTempUnits())
+            val cached = weatherCache.get(cacheKey)
+            modifyDate(cached?.text.orEmpty(), 2)
+
+            val waitMs = WeatherSchedule.delayUntilNextFetch(
+                lastSuccessMs = cached?.fetchedAtMs,
+                lastFailureMs = lastWeatherFailureMs,
+                failures = weatherFailures,
+                nowMs = System.currentTimeMillis(),
+                intervalMs = sharedPreferenceManager.getWeatherUpdateIntervalMs()
+            )
+            if (waitMs > 0 && withTimeoutOrNull(waitMs) { weatherSettingsChanged.receive() } != null) {
+                continue
+            }
+            updateWeather(cacheKey)
         }
     }
 
-    suspend fun updateWeatherText() {
-        val temp = weatherSystem.getTemp()
-        withContext(Dispatchers.Main) {
-            modifyDate(temp, 2)
+    /**
+     * Fetches the weather and caches it under [cacheKey].
+     * On failure the displayed reading is kept and the fetch time is not advanced.
+     */
+    private suspend fun updateWeather(cacheKey: String) {
+        val temp = withContext(Dispatchers.IO) {
+            if (sharedPreferenceManager.isWeatherGPS()) {
+                weatherSystem.updateGpsLocation()
+                // updateGpsLocation swallows cancellation, so check before starting the request.
+                ensureActive()
+            }
+            weatherSystem.getTemp()
         }
+        val now = System.currentTimeMillis()
+        // Empty here means GPS has no fix yet, since a missing manual location is handled by the caller.
+        if (temp.isNullOrEmpty()) {
+            weatherFailures++
+            lastWeatherFailureMs = now
+            return
+        }
+        weatherFailures = 0
+        lastWeatherFailureMs = null
+        weatherCache.put(cacheKey, temp, now)
+        modifyDate(temp, 2)
+    }
+
+    /**
+     * Re-evaluates the weather schedule after a settings change.
+     * The loop only runs while home is visible, so changes made in settings apply on return.
+     */
+    private fun rescheduleWeather() {
+        weatherFailures = 0
+        lastWeatherFailureMs = null
+        weatherSettingsChanged.trySend(Unit)
     }
 
     private suspend fun updateScreenTime() {
@@ -1799,6 +1899,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
                         currentFilteredApps = installedApps
                         updateMenu(installedApps)
                         refreshAlphabetIndex(currentFilteredApps)
+                        if (isAppMenuStale) refreshAppMenu()
                     } else if (result.filteredApps != null) {
                         isSearchActive = true
                         applySearchFilter(result.filteredApps)
@@ -1952,7 +2053,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         super.onDestroy()
 
         try {
-            launcherApps.unregisterCallback(suspensionCallback)
+            launcherApps.unregisterCallback(packageCallback)
             unregisterBatteryReceiver()
             unregisterNotificationReceiver()
             nowPlayingManager?.stop()
@@ -2045,6 +2146,8 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         // Same for widget updates: providers stop pushing RemoteViews to a stopped host.
         stopWidgetHost()
         (getSystemService(AUDIO_SERVICE) as AudioManager).unregisterAudioDeviceCallback(headphoneCallback)
+        // Package changes stay recorded and are applied by the refresh in onResume.
+        packageRefreshJob?.cancel()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -2069,8 +2172,12 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         if (!permissionUtils.hasPermission(this@MainActivity, Manifest.permission.ACCESS_COARSE_LOCATION)) {
             sharedPreferenceManager.setWeatherGPS(false)
         }
+        // Also catches package events missed while stopped; backToHome refreshes the menu itself.
+        packageRefreshJob?.cancel()
         if (returnAllowed) {
             backToHome(0)
+        } else {
+            lifecycleScope.launch { refreshAppMenu() }
         }
         returnAllowed = true
         appAdapter?.notifyDataSetChanged()

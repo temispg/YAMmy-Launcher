@@ -66,20 +66,30 @@ class AppUtils(private val context: Context, private val launcherApps: LauncherA
             }
 
             // Sort apps: pinned apps first, then alphabetically by name
-            sortedApps = allApps.sortedWith(
-                compareBy<Triple<LauncherActivityInfo, UserHandle, Int>> {
-                    // Invert pinned status so pinned apps come first
-                    !sharedPreferenceManager.isAppPinned(it.first.componentName.flattenToString(), it.third)
-                }.thenBy {
-                    sharedPreferenceManager.getAppName(
-                        it.first.componentName.flattenToString(),
-                        it.third,
-                        AppNameResolver.resolveBaseLabel(context, it.first)
-                    ).toString().lowercase()
-                }
-            )
+            sortedApps = sortApps(allApps, sharedPreferenceManager.getPinnedApps())
         }
         return sortedApps
+    }
+
+    private class SortEntry(val app: Triple<LauncherActivityInfo, UserHandle, Int>, val pinned: Boolean, val name: String)
+
+    /** Orders [pinnedApps] first, then by lowercase display name, resolving each app's keys once. */
+    private fun sortApps(
+        apps: List<Triple<LauncherActivityInfo, UserHandle, Int>>,
+        pinnedApps: Set<Pair<String, Int>>
+    ): List<Triple<LauncherActivityInfo, UserHandle, Int>> {
+        return apps
+            .map { app ->
+                val component = app.first.componentName.flattenToString()
+                val name = sharedPreferenceManager.getAppName(
+                    component,
+                    app.third,
+                    AppNameResolver.resolveBaseLabel(context, app.first)
+                ).toString().lowercase()
+                SortEntry(app, component to app.third in pinnedApps, name)
+            }
+            .sortedWith(compareBy<SortEntry>({ !it.pinned }, { it.name }))
+            .map { it.app }
     }
 
     /**
@@ -103,13 +113,7 @@ class AppUtils(private val context: Context, private val launcherApps: LauncherA
             }
 
             // Sort hidden apps alphabetically
-            sortedApps = allApps.sortedBy {
-                sharedPreferenceManager.getAppName(
-                    it.first.componentName.flattenToString(),
-                    it.third,
-                    AppNameResolver.resolveBaseLabel(context, it.first)
-                ).toString().lowercase()
-            }
+            sortedApps = sortApps(allApps, emptySet())
         }
         return sortedApps
     }

@@ -17,6 +17,10 @@ class SharedPreferenceManager(private val context: Context) {
     private val store = SafePreferences(preferences)
     private val logger = Logger.getInstance(context)
 
+    /** Last decoded pinned set with the raw string it came from; read from the main and background threads. */
+    @Volatile
+    private var pinnedAppsCache: Pair<String, Set<Pair<String, Int>>>? = null
+
     init {
         store.repairKnownTypes()
     }
@@ -302,7 +306,13 @@ class SharedPreferenceManager(private val context: Context) {
     }
 
     fun getPinnedApps(): Set<Pair<String, Int>> {
-        return store.string("pinnedApps", "")
+        val raw = store.string("pinnedApps", "")
+        pinnedAppsCache?.let { (cachedRaw, pinnedApps) -> if (cachedRaw == raw) return pinnedApps }
+        return decodePinnedApps(raw).also { pinnedAppsCache = raw to it }
+    }
+
+    private fun decodePinnedApps(raw: String): Set<Pair<String, Int>> {
+        return raw
             .split("§section§")
             .mapNotNull { item ->
                 val parts = item.split("§splitter§", limit = 2)
